@@ -56,7 +56,7 @@ export async function requestEcuFileUpload(
   return { uploadUrl, storageKey };
 }
 
-export interface EcuFileUploadDb {
+export interface EcuFileUploadDb extends EcuFileDb {
   ecuFile: EcuFileDb["ecuFile"] & {
     findFirst: (args: {
       where: { tenantId: string; vehicleId: string; checksum: string };

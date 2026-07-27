@@ -30,6 +30,13 @@ export class StockRomReferenceNotFoundError extends Error {
   }
 }
 
+export class VehicleNotFoundError extends Error {
+  constructor(vehicleId: string) {
+    super(`Araç bulunamadı veya bu tenant'a ait değil: ${vehicleId}`);
+    this.name = "VehicleNotFoundError";
+  }
+}
+
 export interface EcuFileRecord {
   id: string;
   tenantId: string;
@@ -49,6 +56,12 @@ export interface EcuFileCreateData {
 }
 
 export interface EcuFileDb {
+  // Güvenlik (bkz. docs/security-audit.md, KRİTİK-1): vehicleId'nin gerçekten
+  // input.tenantId'ye ait olduğunu doğrulamadan bir EcuFile ASLA oluşturulmaz —
+  // aksi halde tenant A, tenant B'nin aracına dosya kaydı iliştirebilir.
+  vehicle: {
+    findUnique: (args: { where: { id: string; tenantId: string } }) => Promise<{ id: string } | null>;
+  };
   ecuFile: {
     create: (args: { data: EcuFileCreateData }) => Promise<{ id: string }>;
     findUnique: (args: { where: { id: string } }) => Promise<EcuFileRecord | null>;
@@ -57,6 +70,13 @@ export interface EcuFileDb {
 
 export async function createEcuFile(db: EcuFileDb, rawInput: CreateEcuFileInput) {
   const input = createEcuFileInputSchema.parse(rawInput);
+
+  const vehicle = await db.vehicle.findUnique({
+    where: { id: input.vehicleId, tenantId: input.tenantId },
+  });
+  if (!vehicle) {
+    throw new VehicleNotFoundError(input.vehicleId);
+  }
 
   if (input.fileType === EcuFileType.ORIGINAL_STOCK) {
     if (input.stockRomRef) {

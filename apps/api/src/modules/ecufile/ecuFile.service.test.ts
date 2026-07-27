@@ -3,6 +3,7 @@ import {
   createEcuFile,
   MissingStockRomReferenceError,
   StockRomReferenceNotFoundError,
+  VehicleNotFoundError,
   type EcuFileDb,
 } from "./ecuFile.service.js";
 
@@ -25,11 +26,24 @@ function baseInput(overrides: Partial<Parameters<typeof createEcuFile>[1]> = {})
 function createMockDb() {
   const create = vi.fn<EcuFileDb["ecuFile"]["create"]>();
   const findUnique = vi.fn<EcuFileDb["ecuFile"]["findUnique"]>();
-  const db: EcuFileDb = { ecuFile: { create, findUnique } };
-  return { db, create, findUnique };
+  const vehicleFindUnique = vi.fn<EcuFileDb["vehicle"]["findUnique"]>();
+  // Testlerin çoğu araç sahipliğini değil, stockRomRef/self-reference davranışını
+  // hedefliyor — varsayılan olarak aracın çağıranın tenant'ına ait olduğunu
+  // simüle ediyoruz; sahiplik testi bunu ayrıca boş döndürerek geçersiz kılar.
+  vehicleFindUnique.mockResolvedValue({ id: vehicleId });
+  const db: EcuFileDb = { vehicle: { findUnique: vehicleFindUnique }, ecuFile: { create, findUnique } };
+  return { db, create, findUnique, vehicleFindUnique };
 }
 
 describe("createEcuFile", () => {
+  it("vehicleId çağıranın tenant'ına ait değilse VehicleNotFoundError fırlatır (tenant izolasyonu)", async () => {
+    const { db, create, vehicleFindUnique } = createMockDb();
+    vehicleFindUnique.mockResolvedValue(null);
+
+    await expect(createEcuFile(db, baseInput())).rejects.toBeInstanceOf(VehicleNotFoundError);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("stockRomRef verilmeden STAGE dosyası kaydedilemez", async () => {
     const { db, create } = createMockDb();
 

@@ -31,8 +31,11 @@ function createMockDb() {
   const dealerCreditTransactionCreate =
     vi.fn<FulfillFileRequestDb["dealerCreditTransaction"]["create"]>();
   const auditCreate = vi.fn<FulfillFileRequestDb["fileRequestStatusAuditLog"]["create"]>();
+  const vehicleFindUnique = vi.fn<FulfillFileRequestDb["vehicle"]["findUnique"]>();
+  vehicleFindUnique.mockResolvedValue({ id: vehicleId });
 
   const db: FulfillFileRequestDb = {
+    vehicle: { findUnique: vehicleFindUnique },
     ecuFile: { create: ecuFileCreate, findUnique: ecuFileFindUnique },
     fileRequest: { findUnique: fileRequestFindUnique, update: fileRequestUpdate },
     dealerAccount: { findUnique: dealerAccountFindUnique, update: dealerAccountUpdate },
@@ -48,6 +51,7 @@ function createMockDb() {
     fileRequestUpdate,
     dealerAccountFindUnique,
     dealerAccountUpdate,
+    vehicleFindUnique,
     dealerCreditTransactionCreate,
     auditCreate,
   };

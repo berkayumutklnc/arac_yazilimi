@@ -24,8 +24,13 @@ function createMockDb() {
   const create = vi.fn<EcuFileUploadDb["ecuFile"]["create"]>();
   const findUnique = vi.fn<EcuFileUploadDb["ecuFile"]["findUnique"]>();
   const findFirst = vi.fn<EcuFileUploadDb["ecuFile"]["findFirst"]>();
-  const db: EcuFileUploadDb = { ecuFile: { create, findUnique, findFirst } };
-  return { db, create, findUnique, findFirst };
+  const vehicleFindUnique = vi.fn<EcuFileUploadDb["vehicle"]["findUnique"]>();
+  vehicleFindUnique.mockResolvedValue({ id: vehicleId });
+  const db: EcuFileUploadDb = {
+    vehicle: { findUnique: vehicleFindUnique },
+    ecuFile: { create, findUnique, findFirst },
+  };
+  return { db, create, findUnique, findFirst, vehicleFindUnique };
 }
 
 describe("requestEcuFileUpload", () => {

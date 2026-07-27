@@ -34,6 +34,7 @@ import {
   fulfillFileRequest,
   type FulfillFileRequestDb,
 } from "../modules/dealer/fileRequestFulfillment.service.js";
+import { createEcuFile, type EcuFileDb } from "../modules/ecufile/ecuFile.service.js";
 
 const TENANT_B = "tenant-B-attacker";
 
@@ -127,7 +128,9 @@ describe("Kötü niyetli komşu tenant — mevcut korumalar", () => {
     const dealerCreditTransactionCreate =
       vi.fn<FulfillFileRequestDb["dealerCreditTransaction"]["create"]>();
     const auditCreate = vi.fn<FulfillFileRequestDb["fileRequestStatusAuditLog"]["create"]>();
+    const vehicleFindUnique = vi.fn<FulfillFileRequestDb["vehicle"]["findUnique"]>();
     const db: FulfillFileRequestDb = {
+      vehicle: { findUnique: vehicleFindUnique },
       ecuFile: { create: ecuFileCreate, findUnique: ecuFileFindUnique },
       fileRequest: { findUnique: fileRequestFindUnique, update: fileRequestUpdate },
       dealerAccount: { findUnique: dealerAccountFindUnique, update: dealerAccountUpdate },
@@ -149,5 +152,36 @@ describe("Kötü niyetli komşu tenant — mevcut korumalar", () => {
     expect(ecuFileCreate).not.toHaveBeenCalled();
     expect(dealerAccountUpdate).not.toHaveBeenCalled();
     expect(dealerCreditTransactionCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe("Kötü niyetli komşu tenant — yamalanan zafiyetler", () => {
+  it("EcuFile oluşturma: Tenant B, kendi tenantId'siyle Tenant A'nın aracına dosya kaydı iliştiremez", async () => {
+    // Tenant B, A'nın vehicleId'sini biliyor (ör. sızdırılmış bir loglama,
+    // tahmin edilebilir id vb.) ve kendi tenantId'siyle bir ORIGINAL_STOCK
+    // dosyası oluşturmaya çalışıyor. Araç, B'nin tenant'ına ait DEĞİL.
+    const create = vi.fn<EcuFileDb["ecuFile"]["create"]>();
+    const findUnique = vi.fn<EcuFileDb["ecuFile"]["findUnique"]>();
+    const vehicleFindUnique = vi.fn<EcuFileDb["vehicle"]["findUnique"]>();
+    vehicleFindUnique.mockResolvedValue(null); // araç B'nin tenant'ında yok
+    const db: EcuFileDb = {
+      vehicle: { findUnique: vehicleFindUnique },
+      ecuFile: { create, findUnique },
+    };
+
+    await expect(
+      createEcuFile(db, {
+        tenantId: TENANT_B,
+        vehicleId: "vehicle-belongs-to-A",
+        fileType: "ORIGINAL_STOCK",
+        storageKey: "s3://attacker/upload.bin",
+        checksum: "attacker-checksum",
+        uploadedBy: "attacker-user",
+      }),
+    ).rejects.toThrow();
+    expect(vehicleFindUnique).toHaveBeenCalledWith({
+      where: { id: "vehicle-belongs-to-A", tenantId: TENANT_B },
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 });
