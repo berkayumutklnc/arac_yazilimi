@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+.next/
+coverage/
+.env
+.env.local
+*.log
+.DS_Store
+apps/diag-service/.venv/
+apps/diag-service/__pycache__/
+apps/diag-service/**/*.pyc
+apps/diag-service/**/.pytest_cache/
+.claude/

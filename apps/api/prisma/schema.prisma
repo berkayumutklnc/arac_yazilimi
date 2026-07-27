@@ -1,0 +1,339 @@
+// Prisma schema — Faz 1 MVP
+// Karar notları: ../../docs/adr/0001-prisma-tenant-isolation.md, ../../docs/adr/0002-ecufile-stockromref-workorder-compliance.md, ../../docs/adr/0003-workorder-status-machine-audit-log.md, ../../docs/adr/0004-ecufile-upload-download-policy-audit.md, ../../docs/adr/0005-dealer-hub-file-request-credit.md
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ENGINEER
+  RECEPTIONIST
+  DEALER
+}
+
+// Sıkı doğrusal yaşam döngüsü (bkz. ADR 0003): DRAFT -> ACCEPTED -> IN_PROGRESS ->
+// AWAITING_PARTS -> QUALITY_CHECK -> DELIVERED -> CLOSED. Geçiş kuralları
+// apps/api/src/modules/workorder/workOrderStatus.machine.ts içinde uygulanır.
+enum WorkOrderStatus {
+  DRAFT
+  ACCEPTED
+  IN_PROGRESS
+  AWAITING_PARTS
+  QUALITY_CHECK
+  DELIVERED
+  CLOSED
+}
+
+enum EcuFileType {
+  ORIGINAL_STOCK
+  STAGE1
+  STAGE2
+  CUSTOM
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+// Hub/dealer dosya talebi yaşam döngüsü (bkz. ADR 0005): dallanmalı durum makinesi,
+// apps/api/src/modules/dealer/fileRequestStatus.machine.ts içinde uygulanır.
+enum FileRequestStatus {
+  PENDING
+  ACCEPTED
+  IN_PROGRESS
+  FULFILLED
+  REJECTED
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users                   User[]
+  customers               Customer[]
+  vehicles                Vehicle[]
+  workOrders              WorkOrder[]
+  ecuFiles                EcuFile[]
+  invoices                Invoice[]
+  workOrderStatusAuditLogs WorkOrderStatusAuditLog[]
+  ecuFileDownloadAuditLogs EcuFileDownloadAuditLog[]
+
+  dealerAccountsAsHub    DealerAccount[] @relation("HubAccounts")
+  dealerAccountsAsDealer DealerAccount[] @relation("DealerAccounts")
+  fileRequestsAsHub      FileRequest[]   @relation("HubFileRequests")
+  fileRequestsAsDealer   FileRequest[]   @relation("DealerFileRequests")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  email        String
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Customer {
+  id             String    @id @default(uuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
+  fullName       String
+  phoneHash      String
+  nationalIdHash String?
+  deletedAt      DateTime?
+
+  vehicles Vehicle[]
+
+  @@index([tenantId])
+}
+
+model Vehicle {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  plate      String
+  vin        String?
+  brand      String
+  model      String
+  year       Int
+
+  workOrders   WorkOrder[]
+  ecuFiles     EcuFile[]
+  fileRequests FileRequest[]
+
+  @@index([tenantId])
+  @@index([tenantId, plate])
+}
+
+model ServiceType {
+  id                 String  @id @default(uuid())
+  name               String
+  affectsEnginePower Boolean @default(false)
+
+  workOrderItems WorkOrderItem[]
+}
+
+model WorkOrder {
+  id                       String          @id @default(uuid())
+  tenantId                 String
+  tenant                   Tenant          @relation(fields: [tenantId], references: [id])
+  vehicleId                String
+  vehicle                  Vehicle         @relation(fields: [vehicleId], references: [id])
+  engineerId               String?
+  status                   WorkOrderStatus @default(DRAFT)
+  requiresAitmRegistration Boolean         @default(false)
+  createdAt                DateTime        @default(now())
+  closedAt                 DateTime?
+
+  items           WorkOrderItem[]
+  complianceSteps WorkOrderComplianceStep[]
+  statusAuditLogs WorkOrderStatusAuditLog[]
+  invoice         Invoice?
+
+  @@index([tenantId])
+}
+
+model WorkOrderItem {
+  id            String      @id @default(uuid())
+  workOrderId   String
+  workOrder     WorkOrder   @relation(fields: [workOrderId], references: [id])
+  serviceTypeId String
+  serviceType   ServiceType @relation(fields: [serviceTypeId], references: [id])
+  priceKurus    Int
+
+  @@index([workOrderId])
+}
+
+model WorkOrderComplianceStep {
+  id          String    @id @default(uuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+  stepName    String
+  completedAt DateTime?
+
+  @@index([workOrderId])
+}
+
+model WorkOrderStatusAuditLog {
+  id          String          @id @default(uuid())
+  tenantId    String
+  tenant      Tenant          @relation(fields: [tenantId], references: [id])
+  workOrderId String
+  workOrder   WorkOrder       @relation(fields: [workOrderId], references: [id])
+  fromStatus  WorkOrderStatus
+  toStatus    WorkOrderStatus
+  changedBy   String
+  changedAt   DateTime        @default(now())
+
+  @@index([tenantId])
+  @@index([workOrderId])
+}
+
+model EcuFile {
+  id          String      @id @default(uuid())
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
+  vehicleId   String
+  vehicle     Vehicle     @relation(fields: [vehicleId], references: [id])
+  fileType    EcuFileType
+  storageKey  String
+  checksum    String
+  // Orijinal stock ROM'a zorunlu referans (CLAUDE.md kural 2).
+  // ORIGINAL_STOCK dosyası kendi id'sine self-reference verir; STAGE/CUSTOM
+  // dosyalar gerçek orijinali işaret etmek zorundadır. NOT NULL — yedeksiz kayıt oluşturulamaz.
+  stockRomRef String
+  stockRom    EcuFile     @relation("StockRomBackup", fields: [stockRomRef], references: [id])
+  derivedFrom EcuFile[]   @relation("StockRomBackup")
+  uploadedBy  String
+  createdAt   DateTime    @default(now())
+
+  downloadAuditLogs EcuFileDownloadAuditLog[]
+  asReadFileIn      FileRequest[]             @relation("FileRequestReadFile")
+  asResultFileIn    FileRequest?              @relation("FileRequestResultFile")
+
+  @@index([tenantId])
+  @@index([vehicleId])
+}
+
+model EcuFileDownloadAuditLog {
+  id               String   @id @default(uuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  ecuFileId        String
+  ecuFile          EcuFile  @relation(fields: [ecuFileId], references: [id])
+  downloadedBy     String
+  downloadedByRole Role
+  downloadedAt     DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([ecuFileId])
+}
+
+model DealerAccount {
+  id                 String   @id @default(uuid())
+  hubTenantId        String
+  hubTenant          Tenant   @relation("HubAccounts", fields: [hubTenantId], references: [id])
+  dealerTenantId     String
+  dealerTenant       Tenant   @relation("DealerAccounts", fields: [dealerTenantId], references: [id])
+  creditBalanceKurus Int      @default(0)
+  createdAt          DateTime @default(now())
+
+  fileRequests FileRequest[]
+  transactions DealerCreditTransaction[]
+
+  @@unique([hubTenantId, dealerTenantId])
+  @@index([hubTenantId])
+  @@index([dealerTenantId])
+}
+
+model DealerCreditTransaction {
+  id                String        @id @default(uuid())
+  dealerAccountId   String
+  dealerAccount     DealerAccount @relation(fields: [dealerAccountId], references: [id])
+  // Düşüş için negatif değer; her para hareketinin denetlenebilir kaydı.
+  amountKurus       Int
+  balanceAfterKurus Int
+  fileRequestId     String?
+  fileRequest       FileRequest?  @relation(fields: [fileRequestId], references: [id])
+  createdAt         DateTime      @default(now())
+
+  @@index([dealerAccountId])
+}
+
+model FileRequest {
+  id              String            @id @default(uuid())
+  hubTenantId     String
+  hubTenant       Tenant            @relation("HubFileRequests", fields: [hubTenantId], references: [id])
+  dealerTenantId  String
+  dealerTenant    Tenant            @relation("DealerFileRequests", fields: [dealerTenantId], references: [id])
+  dealerAccountId String
+  dealerAccount   DealerAccount     @relation(fields: [dealerAccountId], references: [id])
+  vehicleId       String
+  vehicle         Vehicle           @relation(fields: [vehicleId], references: [id])
+  readFileId      String
+  readFile        EcuFile           @relation("FileRequestReadFile", fields: [readFileId], references: [id])
+  requestedStage  EcuFileType
+  status          FileRequestStatus @default(PENDING)
+  costKurus       Int?
+  resultFileId    String?           @unique
+  resultFile      EcuFile?          @relation("FileRequestResultFile", fields: [resultFileId], references: [id])
+  requestedBy     String
+  processedBy     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  statusAuditLogs    FileRequestStatusAuditLog[]
+  creditTransactions DealerCreditTransaction[]
+
+  @@index([hubTenantId])
+  @@index([dealerTenantId])
+  @@index([vehicleId])
+}
+
+model FileRequestStatusAuditLog {
+  id             String            @id @default(uuid())
+  fileRequestId  String
+  fileRequest    FileRequest       @relation(fields: [fileRequestId], references: [id])
+  hubTenantId    String
+  dealerTenantId String
+  fromStatus     FileRequestStatus
+  toStatus       FileRequestStatus
+  changedBy      String
+  changedAt      DateTime          @default(now())
+
+  @@index([fileRequestId])
+}
+
+model Invoice {
+  id          String        @id @default(uuid())
+  tenantId    String
+  tenant      Tenant        @relation(fields: [tenantId], references: [id])
+  workOrderId String        @unique
+  workOrder   WorkOrder     @relation(fields: [workOrderId], references: [id])
+  status      InvoiceStatus @default(DRAFT)
+  totalKurus  Int
+  createdAt   DateTime      @default(now())
+
+  lines    InvoiceLine[]
+  payments Payment[]
+
+  @@index([tenantId])
+}
+
+model InvoiceLine {
+  id          String  @id @default(uuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id])
+  description String
+  amountKurus Int
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id          String   @id @default(uuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
+  amountKurus Int
+  paidAt      DateTime @default(now())
+
+  @@index([invoiceId])
+}

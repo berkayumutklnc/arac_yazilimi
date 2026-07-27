@@ -1,0 +1,7 @@
+# ADR 0005 — Hub/Dealer Dosya Talebi ve Kredi Bakiyesi
+
+**Karar:** `DealerAccount(hubTenantId, dealerTenantId, creditBalanceKurus)` bir bayi-tenant ile merkez-tenant arasındaki kredi ilişkisini tutar; şemada ayrı bir "hub" bayrağı yok, ilişki bu satırın varlığıyla kurulur. `FileRequest` durum makinesi: `PENDING → ACCEPTED → IN_PROGRESS → FULFILLED`, `PENDING`/`ACCEPTED`'tan `REJECTED`'a dallanma var.
+**Gerekçe:** "Master-Slave" iş modeli aslında iki farklı tenant arası bir ilişki (her bayi kendi tenant'ında CRM'ini işletir); satır bazlı `DealerAccount` ilişkisi, tek bir tenant'ın hem hub hem dealer olabilmesini (gelecekte çok seviyeli bayilik) şema değişikliği olmadan destekler.
+**Kısıt:** Kalibre dosya (`resultFile`), mevcut `createEcuFile` (bkz. ADR 0002) yeniden kullanılarak **dealer'ın tenant'ında** oluşturulur (`stockRomRef = readFileId`) — dosya, aracın ait olduğu tenant'ta kalmalı ki tenant izolasyonu bozulmasın.
+**Kısıt:** Kredi düşüşü servis katmanında check-then-act ile korunuyor (`creditBalanceKurus - costKurus < 0` ise hiçbir yan etki olmadan `InsufficientCreditError`). Gerçek DB bağlandığında bu, `prisma.$transaction` içine alınmalı ve ek güvence olarak `creditBalanceKurus` kolonuna `CHECK (creditBalanceKurus >= 0)` eklenmelidir (Prisma DSL'de yok, manuel migration SQL'i gerekir) — race condition'a karşı savunma derinliği.
+**Durum:** Taslak — DB yok, servis katmanı DI mock'larıyla test edildi; kredi yükleme (top-up) akışı bu ADR kapsamında değil.

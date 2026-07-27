@@ -1,0 +1,7 @@
+python-can
+udsoncan
+pytest
+fastapi
+uvicorn[standard]
+python-multipart
+httpx

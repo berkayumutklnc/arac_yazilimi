@@ -1,0 +1,7 @@
+# ADR 0004 — EcuFile Upload/Download Servisi: Politika Filtresi, Hash Doğrulama, İndirme Audit Log
+
+**Karar:** Yükleme iki fazlı: `requestEcuFileUpload` (politika filtresinden geçirir, presigned S3 URL üretir) → istemci S3'e yazar → `confirmEcuFileUpload` (S3 nesnesinden SHA-256'yı sunucuda yeniden hesaplar, istemcinin iddia ettiği hash ile karşılaştırır, aynı `tenantId+vehicleId+checksum` ile mevcut kayıt varsa reddeder, geçerliyse mevcut `createEcuFile` (bkz. ADR 0002) ile kaydı yazar).
+**Gerekçe:** Hash'i yalnızca istemciden almak yerine S3 nesnesinden sunucuda yeniden hesaplamak, bütünlük doğrulamasını (tamper/corruption) ve mükerrer dosya tespitini aynı adımda mümkün kılıyor; mevcut `createEcuFile`'ın stockRomRef kuralını tekrar yazmak yerine yeniden kullanıyoruz.
+**Kısıt (CLAUDE.md kural 1):** Dosya adı/metadata'sında dpf/egr/adblue/katalizör/immobilizer iptaline işaret eden kalıplar tespit edilirse yükleme, presigned URL üretilmeden **reddedilir** — bu üretim kodu değil, yasal filtre; istisna yok.
+**Yeni model:** `EcuFileDownloadAuditLog` (tenantId, ecuFileId, downloadedBy, downloadedByRole, downloadedAt) — yalnızca ENGINEER/OWNER rolüne izin verilen her başarılı indirmede bir satır.
+**Durum:** Taslak — S3 adaptörü (`EcuFileStoragePort`) arayüz olarak tanımlandı, gerçek AWS SDK bağlantısı route'lar bu servise bağlanırken ayrı bir görevde eklenecek; testler sahte (fake) storage ile çalışıyor.
