@@ -36,6 +36,10 @@ import {
   type FulfillFileRequestDb,
 } from "../modules/dealer/fileRequestFulfillment.service.js";
 import { createEcuFile, type EcuFileDb } from "../modules/ecufile/ecuFile.service.js";
+import {
+  applyServiceTypeToWorkOrder,
+  type WorkOrderComplianceDb,
+} from "../modules/workorder/workOrderCompliance.service.js";
 
 const TENANT_B = "tenant-B-attacker";
 
@@ -221,5 +225,34 @@ describe("Kötü niyetli komşu tenant — yamalanan zafiyetler", () => {
       where: { id: "vehicle-belongs-to-A", tenantId: TENANT_B },
     });
     expect(fileRequestCreate).not.toHaveBeenCalled();
+  });
+
+  it("WorkOrderCompliance: Tenant B, Tenant A'nın iş emrinin id'sini tahmin edip AİTM alanlarını değiştiremez", async () => {
+    // applyServiceTypeToWorkOrder eskiden workOrderId'yi hiç tenant'a karşı
+    // doğrulamıyordu — herhangi bir çağıran, tahmin/sızdırılmış bir workOrderId
+    // ile başka bir tenant'ın requiresAitmRegistration alanını değiştirip
+    // WorkOrderComplianceStep kaydı oluşturabiliyordu.
+    const workOrderFindUnique = vi.fn<WorkOrderComplianceDb["workOrder"]["findUnique"]>();
+    workOrderFindUnique.mockResolvedValue(null); // B'nin tenantId'siyle A'nın kaydı bulunamaz
+    const workOrderUpdate = vi.fn<WorkOrderComplianceDb["workOrder"]["update"]>();
+    const stepFindMany = vi.fn<WorkOrderComplianceDb["workOrderComplianceStep"]["findMany"]>();
+    const stepCreateMany = vi.fn<WorkOrderComplianceDb["workOrderComplianceStep"]["createMany"]>();
+    const db: WorkOrderComplianceDb = {
+      workOrder: { findUnique: workOrderFindUnique, update: workOrderUpdate },
+      workOrderComplianceStep: { findMany: stepFindMany, createMany: stepCreateMany },
+    };
+
+    await expect(
+      applyServiceTypeToWorkOrder(
+        db,
+        { workOrderId: "wo-belongs-to-A", tenantId: TENANT_B },
+        { id: "svc-1", affectsEnginePower: true },
+      ),
+    ).rejects.toThrow();
+    expect(workOrderFindUnique).toHaveBeenCalledWith({
+      where: { id: "wo-belongs-to-A", tenantId: TENANT_B },
+    });
+    expect(workOrderUpdate).not.toHaveBeenCalled();
+    expect(stepCreateMany).not.toHaveBeenCalled();
   });
 });

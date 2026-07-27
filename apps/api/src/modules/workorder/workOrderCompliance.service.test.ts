@@ -1,43 +1,69 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyServiceTypeToWorkOrder } from "./workOrderCompliance.service.js";
+import { applyServiceTypeToWorkOrder, type WorkOrderComplianceDb } from "./workOrderCompliance.service.js";
+import { WorkOrderNotFoundError } from "./workOrderTransition.service.js";
 
 const workOrderId = "wo-1";
+const tenantId = "tenant-1";
+
+function createMockDb() {
+  const findUnique = vi.fn<WorkOrderComplianceDb["workOrder"]["findUnique"]>();
+  findUnique.mockResolvedValue({ id: workOrderId });
+  const update = vi.fn<WorkOrderComplianceDb["workOrder"]["update"]>();
+  const findMany = vi.fn<WorkOrderComplianceDb["workOrderComplianceStep"]["findMany"]>();
+  findMany.mockResolvedValue([]);
+  const createMany = vi.fn<WorkOrderComplianceDb["workOrderComplianceStep"]["createMany"]>();
+  const db: WorkOrderComplianceDb = {
+    workOrder: { findUnique, update },
+    workOrderComplianceStep: { findMany, createMany },
+  };
+  return { db, findUnique, update, findMany, createMany };
+}
 
 describe("applyServiceTypeToWorkOrder", () => {
+  it("workOrderId çağıranın tenant'ına ait değilse WorkOrderNotFoundError fırlatır (tenant izolasyonu)", async () => {
+    const { db, findUnique, update, createMany } = createMockDb();
+    findUnique.mockResolvedValue(null);
+
+    await expect(
+      applyServiceTypeToWorkOrder(
+        db,
+        { workOrderId, tenantId },
+        { id: "svc-1", affectsEnginePower: true },
+      ),
+    ).rejects.toBeInstanceOf(WorkOrderNotFoundError);
+    expect(update).not.toHaveBeenCalled();
+    expect(createMany).not.toHaveBeenCalled();
+  });
+
   it("affectsEnginePower=false ise requiresAitmRegistration açılmaz ve step oluşmaz", async () => {
-    const db = {
-      workOrder: { update: vi.fn() },
-      workOrderComplianceStep: { findMany: vi.fn(), createMany: vi.fn() },
-    };
+    const { db, findUnique, update, createMany } = createMockDb();
 
-    await applyServiceTypeToWorkOrder(db, workOrderId, {
-      id: "svc-1",
-      affectsEnginePower: false,
-    });
+    await applyServiceTypeToWorkOrder(
+      db,
+      { workOrderId, tenantId },
+      { id: "svc-1", affectsEnginePower: false },
+    );
 
-    expect(db.workOrder.update).not.toHaveBeenCalled();
-    expect(db.workOrderComplianceStep.createMany).not.toHaveBeenCalled();
+    expect(findUnique).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(createMany).not.toHaveBeenCalled();
   });
 
   it("affectsEnginePower=true ise requiresAitmRegistration=true olur ve TSE/TÜVTÜRK adımları oluşturulur", async () => {
-    const db = {
-      workOrder: { update: vi.fn() },
-      workOrderComplianceStep: {
-        findMany: vi.fn().mockResolvedValue([]),
-        createMany: vi.fn(),
-      },
-    };
+    const { db, findUnique, update, createMany } = createMockDb();
 
-    await applyServiceTypeToWorkOrder(db, workOrderId, {
-      id: "svc-2",
-      affectsEnginePower: true,
-    });
+    await applyServiceTypeToWorkOrder(
+      db,
+      { workOrderId, tenantId },
+      { id: "svc-2", affectsEnginePower: true },
+    );
 
-    expect(db.workOrder.update).toHaveBeenCalledWith({
+    expect(findUnique).toHaveBeenCalledWith({ where: { id: workOrderId, tenantId } });
+    expect(update).toHaveBeenCalledWith({
       where: { id: workOrderId },
       data: { requiresAitmRegistration: true },
     });
-    expect(db.workOrderComplianceStep.createMany).toHaveBeenCalledWith({
+    expect(createMany).toHaveBeenCalledWith({
       data: [
         { workOrderId, stepName: "TSE ön başvuru" },
         { workOrderId, stepName: "TÜVTÜRK tescil" },
@@ -46,26 +72,22 @@ describe("applyServiceTypeToWorkOrder", () => {
   });
 
   it("adımlar zaten varsa tekrar oluşturulmaz (idempotent)", async () => {
-    const db = {
-      workOrder: { update: vi.fn() },
-      workOrderComplianceStep: {
-        findMany: vi.fn().mockResolvedValue([
-          { stepName: "TSE ön başvuru" },
-          { stepName: "TÜVTÜRK tescil" },
-        ]),
-        createMany: vi.fn(),
-      },
-    };
+    const { db, findMany, update, createMany } = createMockDb();
+    findMany.mockResolvedValue([
+      { stepName: "TSE ön başvuru" },
+      { stepName: "TÜVTÜRK tescil" },
+    ]);
 
-    await applyServiceTypeToWorkOrder(db, workOrderId, {
-      id: "svc-3",
-      affectsEnginePower: true,
-    });
+    await applyServiceTypeToWorkOrder(
+      db,
+      { workOrderId, tenantId },
+      { id: "svc-3", affectsEnginePower: true },
+    );
 
-    expect(db.workOrder.update).toHaveBeenCalledWith({
+    expect(update).toHaveBeenCalledWith({
       where: { id: workOrderId },
       data: { requiresAitmRegistration: true },
     });
-    expect(db.workOrderComplianceStep.createMany).not.toHaveBeenCalled();
+    expect(createMany).not.toHaveBeenCalled();
   });
 });
