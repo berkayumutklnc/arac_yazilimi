@@ -42,6 +42,19 @@ export interface RequestEcuFileUploadResult {
   storageKey: string;
 }
 
+// Güvenlik (bkz. docs/security-audit.md, YÜKSEK-1): fileName istemciden
+// gelen güvenilmeyen bir değer. Sanitize edilmeden storage key'e eklenirse
+// "/" veya ".." ile öngörülen tenantId/vehicleId önekinin dışına taşan bir
+// anahtar üretilebilir (S3 anahtar enjeksiyonu; dosya sistemi tabanlı bir
+// storage adaptöründe path traversal). Sadece güvenli karakterlere izin ver.
+function sanitizeFileNameForStorageKey(fileName: string): string {
+  const withoutSeparators = fileName.replace(/[/\\]+/g, "_");
+  const withoutDotDot = withoutSeparators.replace(/\.\.+/g, "_");
+  const safe = withoutDotDot.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const trimmed = safe.slice(-200);
+  return trimmed.length > 0 ? trimmed : "file";
+}
+
 export async function requestEcuFileUpload(
   storage: Pick<EcuFileStoragePort, "createPresignedUploadUrl">,
   params: RequestEcuFileUploadParams,
@@ -51,7 +64,8 @@ export async function requestEcuFileUpload(
     throw new IllegalContentDetectedError(illegalMatch);
   }
 
-  const key = `${params.tenantId}/${params.vehicleId}/${randomUUID()}-${params.fileName}`;
+  const safeFileName = sanitizeFileNameForStorageKey(params.fileName);
+  const key = `${params.tenantId}/${params.vehicleId}/${randomUUID()}-${safeFileName}`;
   const { uploadUrl, key: storageKey } = await storage.createPresignedUploadUrl({ key });
   return { uploadUrl, storageKey };
 }

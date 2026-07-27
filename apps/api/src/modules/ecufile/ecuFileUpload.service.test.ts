@@ -59,6 +59,26 @@ describe("requestEcuFileUpload", () => {
     expect(result.uploadUrl).toBe("https://s3.example.com/upload");
     expect(createPresignedUploadUrl).toHaveBeenCalledTimes(1);
   });
+
+  it("dosya adındaki path traversal / ayraç karakterleri storage key'e sanitize edilmeden geçmez", async () => {
+    const { storage, createPresignedUploadUrl } = createMockStorage();
+    createPresignedUploadUrl.mockImplementation(({ key }) =>
+      Promise.resolve({ uploadUrl: "https://s3.example.com/upload", key }),
+    );
+
+    await requestEcuFileUpload(storage, {
+      tenantId,
+      vehicleId,
+      fileName: "../../../etc/passwd",
+    });
+
+    const requestedKey = createPresignedUploadUrl.mock.calls[0]?.[0]?.key ?? "";
+    expect(requestedKey).not.toContain("..");
+    expect(requestedKey.startsWith(`${tenantId}/${vehicleId}/`)).toBe(true);
+    // İlk iki segment (tenantId/vehicleId) dışında ekstra "/" olmamalı —
+    // aksi halde dosya adı kendi alt yolunu enjekte edebilir.
+    expect(requestedKey.slice(`${tenantId}/${vehicleId}/`.length)).not.toContain("/");
+  });
 });
 
 describe("confirmEcuFileUpload", () => {
