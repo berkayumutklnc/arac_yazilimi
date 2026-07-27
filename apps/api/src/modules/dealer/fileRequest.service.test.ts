@@ -6,6 +6,7 @@ import {
   DealerAccountNotFoundError,
   FileRequestNotFoundError,
   MissingCostError,
+  VehicleNotFoundError,
   type FileRequestDb,
 } from "./fileRequest.service.js";
 import { InvalidFileRequestTransitionError } from "./fileRequestStatus.machine.js";
@@ -21,7 +22,12 @@ function createMockDb() {
   const fileRequestFindUnique = vi.fn<FileRequestDb["fileRequest"]["findUnique"]>();
   const fileRequestUpdate = vi.fn<FileRequestDb["fileRequest"]["update"]>();
   const auditCreate = vi.fn<FileRequestDb["fileRequestStatusAuditLog"]["create"]>();
+  const vehicleFindUnique = vi.fn<FileRequestDb["vehicle"]["findUnique"]>();
+  // Talebin gövdesindeki vehicleId varsayılan olarak dealer'ın kendi tenant'ına
+  // aitmiş gibi davranır; sahiplik testi bunu ayrıca boş döndürerek geçersiz kılar.
+  vehicleFindUnique.mockResolvedValue({ id: "vehicle-1" });
   const db: FileRequestDb = {
+    vehicle: { findUnique: vehicleFindUnique },
     dealerAccount: { findFirst: dealerAccountFindFirst },
     fileRequest: {
       create: fileRequestCreate,
@@ -37,6 +43,7 @@ function createMockDb() {
     fileRequestFindUnique,
     fileRequestUpdate,
     auditCreate,
+    vehicleFindUnique,
   };
 }
 
@@ -51,6 +58,16 @@ describe("createFileRequest", () => {
     readFileId: "read-file-1",
     requestedStage: EcuFileType.STAGE1,
   };
+
+  it("vehicleId dealer'ın kendi tenant'ına ait değilse VehicleNotFoundError fırlatır (tenant izolasyonu)", async () => {
+    const { db, vehicleFindUnique, fileRequestCreate } = createMockDb();
+    vehicleFindUnique.mockResolvedValue(null);
+
+    await expect(createFileRequest(db, dealerUser, baseInput)).rejects.toBeInstanceOf(
+      VehicleNotFoundError,
+    );
+    expect(fileRequestCreate).not.toHaveBeenCalled();
+  });
 
   it("DEALER olmayan bir rol talep açamaz", async () => {
     const { db, fileRequestCreate } = createMockDb();

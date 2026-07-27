@@ -26,6 +26,7 @@ import {
   type EcuFileDownloadStoragePort,
 } from "../modules/ecufile/ecuFileDownload.service.js";
 import {
+  createFileRequest,
   transitionFileRequestStatus,
   ForbiddenRoleError as FileRequestForbiddenRoleError,
   type FileRequestDb,
@@ -98,6 +99,7 @@ describe("Kötü niyetli komşu tenant — mevcut korumalar", () => {
     const auditCreate = vi.fn<FileRequestDb["fileRequestStatusAuditLog"]["create"]>();
     const dealerAccountFindFirst = vi.fn<FileRequestDb["dealerAccount"]["findFirst"]>();
     const db: FileRequestDb = {
+      vehicle: { findUnique: vi.fn() },
       dealerAccount: { findFirst: dealerAccountFindFirst },
       fileRequest: { create: vi.fn(), findUnique, update },
       fileRequestStatusAuditLog: { create: auditCreate },
@@ -183,5 +185,41 @@ describe("Kötü niyetli komşu tenant — yamalanan zafiyetler", () => {
       where: { id: "vehicle-belongs-to-A", tenantId: TENANT_B },
     });
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("FileRequest oluşturma: kötü niyetli bir DEALER, Tenant A'nın aracı için hub'a talep açamaz", async () => {
+    // Malicious dealer (Tenant B) kendi hesabıyla, sahibi olmadığı bir
+    // vehicleId ("Tenant A'ya ait") vererek hub'a dosya talebi açmaya
+    // çalışıyor. DealerAccount gerçek/geçerli olsa bile araç B'ye ait değil.
+    const dealerAccountFindFirst = vi.fn<FileRequestDb["dealerAccount"]["findFirst"]>();
+    dealerAccountFindFirst.mockResolvedValue({
+      id: "acct-1",
+      hubTenantId: "hub-1",
+      dealerTenantId: TENANT_B,
+      creditBalanceKurus: 100000,
+    });
+    const fileRequestCreate = vi.fn<FileRequestDb["fileRequest"]["create"]>();
+    const vehicleFindUnique = vi.fn<FileRequestDb["vehicle"]["findUnique"]>();
+    vehicleFindUnique.mockResolvedValue(null); // araç B'nin tenant'ında yok
+    const db: FileRequestDb = {
+      vehicle: { findUnique: vehicleFindUnique },
+      dealerAccount: { findFirst: dealerAccountFindFirst },
+      fileRequest: { create: fileRequestCreate, findUnique: vi.fn(), update: vi.fn() },
+      fileRequestStatusAuditLog: { create: vi.fn() },
+    };
+    const maliciousDealer = { id: "malicious-dealer", tenantId: TENANT_B, role: Role.DEALER };
+
+    await expect(
+      createFileRequest(db, maliciousDealer, {
+        hubTenantId: "hub-1",
+        vehicleId: "vehicle-belongs-to-A",
+        readFileId: "some-file-id",
+        requestedStage: "STAGE1",
+      }),
+    ).rejects.toThrow();
+    expect(vehicleFindUnique).toHaveBeenCalledWith({
+      where: { id: "vehicle-belongs-to-A", tenantId: TENANT_B },
+    });
+    expect(fileRequestCreate).not.toHaveBeenCalled();
   });
 });

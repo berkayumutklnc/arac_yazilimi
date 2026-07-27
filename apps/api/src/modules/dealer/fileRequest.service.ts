@@ -35,6 +35,13 @@ export class MissingCostError extends Error {
   }
 }
 
+export class VehicleNotFoundError extends Error {
+  constructor(vehicleId: string) {
+    super(`Araç bulunamadı veya bu tenant'a ait değil: ${vehicleId}`);
+    this.name = "VehicleNotFoundError";
+  }
+}
+
 export interface ActingUser {
   id: string;
   tenantId: string;
@@ -95,6 +102,11 @@ interface FileRequestAuditData {
 }
 
 export interface FileRequestDb {
+  // Güvenlik (bkz. docs/security-audit.md, KRİTİK-2): vehicleId'nin gerçekten
+  // dealerTenantId'ye ait olduğunu doğrulamadan talep ASLA oluşturulmaz.
+  vehicle: {
+    findUnique: (args: { where: { id: string; tenantId: string } }) => Promise<{ id: string } | null>;
+  };
   dealerAccount: {
     findFirst: (args: {
       where: { hubTenantId: string; dealerTenantId: string };
@@ -125,6 +137,13 @@ export async function createFileRequest(
 
   const input = createFileRequestInputSchema.parse(rawInput);
   const dealerTenantId = actingUser.tenantId;
+
+  const vehicle = await db.vehicle.findUnique({
+    where: { id: input.vehicleId, tenantId: dealerTenantId },
+  });
+  if (!vehicle) {
+    throw new VehicleNotFoundError(input.vehicleId);
+  }
 
   const dealerAccount = await db.dealerAccount.findFirst({
     where: { hubTenantId: input.hubTenantId, dealerTenantId },
