@@ -49,7 +49,11 @@ interface FileRequestAuditData {
   changedBy: string;
 }
 
-export interface FulfillFileRequestDb extends EcuFileDb {
+// DealerAccount/FileRequest/FileRequestStatusAuditLog/DealerCreditTransaction
+// bilinçli olarak tenant-scope extension'ın DIŞINDA (ADR 0006, Model Kapsamı
+// Tablosu) — hangi tenant'a scoped bir istemciyle çağrılırsa çağrılsın bu
+// modeller için davranış aynıdır (extension bunlara hiç dokunmaz).
+export interface FulfillFileRequestDb {
   fileRequest: {
     findUnique: (args: { where: { id: string } }) => Promise<FulfillFileRequestRecord | null>;
     update: (args: {
@@ -89,7 +93,20 @@ export interface FulfillFileRequestParams {
   checksum: string;
 }
 
-export async function fulfillFileRequest(db: FulfillFileRequestDb, params: FulfillFileRequestParams) {
+export interface FulfillFileRequestDeps {
+  db: FulfillFileRequestDb;
+  // Kalibre dosya DEALER'ın tenant'ında oluşturulmalı (ADR 0002/0005), ama bu
+  // fonksiyonu tetikleyen hub kullanıcısının request-scoped db'si HUB'ın
+  // tenant'ına scoped — dealer'ın tenant'ı ancak fileRequest kaydı
+  // okunduktan SONRA bilinir. Bu yüzden EcuFile/Vehicle erişimi için ayrı,
+  // sonradan (fetch edilen dealerTenantId ile) scoped bir görünüm isteniyor.
+  scopeEcuFileToDealerTenant: (dealerTenantId: string) => EcuFileDb;
+}
+
+export async function fulfillFileRequest(
+  deps: FulfillFileRequestDeps,
+  params: FulfillFileRequestParams,
+) {
   const isHubUser =
     HUB_ALLOWED_ROLES.includes(params.actingUser.role) &&
     params.actingUser.tenantId === params.hubTenantId;
@@ -99,7 +116,7 @@ export async function fulfillFileRequest(db: FulfillFileRequestDb, params: Fulfi
     );
   }
 
-  const fileRequest = await db.fileRequest.findUnique({ where: { id: params.fileRequestId } });
+  const fileRequest = await deps.db.fileRequest.findUnique({ where: { id: params.fileRequestId } });
   if (!fileRequest || fileRequest.hubTenantId !== params.hubTenantId) {
     throw new FileRequestNotFoundError(params.fileRequestId);
   }
@@ -111,7 +128,7 @@ export async function fulfillFileRequest(db: FulfillFileRequestDb, params: Fulfi
   }
   const costKurus = fileRequest.costKurus;
 
-  const dealerAccount = await db.dealerAccount.findUnique({
+  const dealerAccount = await deps.db.dealerAccount.findUnique({
     where: { id: fileRequest.dealerAccountId },
   });
   if (!dealerAccount) {
@@ -123,8 +140,8 @@ export async function fulfillFileRequest(db: FulfillFileRequestDb, params: Fulfi
     throw new InsufficientCreditError(dealerAccount.creditBalanceKurus, costKurus);
   }
 
-  const resultFile = await createEcuFile(db, {
-    tenantId: fileRequest.dealerTenantId,
+  const dealerEcuFileDb = deps.scopeEcuFileToDealerTenant(fileRequest.dealerTenantId);
+  const resultFile = await createEcuFile(dealerEcuFileDb, {
     vehicleId: fileRequest.vehicleId,
     fileType: fileRequest.requestedStage,
     storageKey: params.storageKey,
@@ -133,12 +150,12 @@ export async function fulfillFileRequest(db: FulfillFileRequestDb, params: Fulfi
     stockRomRef: fileRequest.readFileId,
   });
 
-  await db.dealerAccount.update({
+  await deps.db.dealerAccount.update({
     where: { id: dealerAccount.id },
     data: { creditBalanceKurus: balanceAfter },
   });
 
-  await db.dealerCreditTransaction.create({
+  await deps.db.dealerCreditTransaction.create({
     data: {
       dealerAccountId: dealerAccount.id,
       amountKurus: -costKurus,
@@ -147,7 +164,7 @@ export async function fulfillFileRequest(db: FulfillFileRequestDb, params: Fulfi
     },
   });
 
-  await db.fileRequest.update({
+  await deps.db.fileRequest.update({
     where: { id: fileRequest.id },
     data: {
       status: "FULFILLED",
@@ -156,7 +173,7 @@ export async function fulfillFileRequest(db: FulfillFileRequestDb, params: Fulfi
     },
   });
 
-  await db.fileRequestStatusAuditLog.create({
+  await deps.db.fileRequestStatusAuditLog.create({
     data: {
       fileRequestId: fileRequest.id,
       hubTenantId: fileRequest.hubTenantId,

@@ -1,4 +1,4 @@
-import { WorkOrderNotFoundError } from "./workOrderTransition.service.js";
+import { WorkOrderNotFoundError, type WorkOrderRecord } from "./workOrderTransition.service.js";
 
 const DEFAULT_COMPLIANCE_STEPS = ["TSE ön başvuru", "TÜVTÜRK tescil"] as const;
 
@@ -13,16 +13,15 @@ interface ComplianceStepRecord {
 
 export interface ApplyServiceTypeParams {
   workOrderId: string;
-  tenantId: string;
 }
 
+// tenantId bilinçli olarak yok — db, request başına tenant-scoped oluşturulur
+// (bkz. db/tenantScopedDb.ts, ADR 0006). findUnique dönüş tipi WorkOrderRecord
+// kullanıyor (WorkOrderTransitionDb ile aynı) ki AppScopedDb'deki intersection
+// çakışmasın — bu servis `status` alanını okumuyor, sadece tip uyumu için var.
 export interface WorkOrderComplianceDb {
-  // Güvenlik (bkz. docs/security-audit.md, KRİTİK-3): workOrderId'nin
-  // tenantId'ye ait olduğu doğrulanmadan hiçbir güncelleme yapılmaz.
   workOrder: {
-    findUnique: (args: {
-      where: { id: string; tenantId: string };
-    }) => Promise<{ id: string } | null>;
+    findUnique: (args: { where: { id: string } }) => Promise<WorkOrderRecord | null>;
     update: (args: {
       where: { id: string };
       data: { requiresAitmRegistration: boolean };
@@ -46,7 +45,7 @@ export async function applyServiceTypeToWorkOrder(
   }
 
   const workOrder = await db.workOrder.findUnique({
-    where: { id: params.workOrderId, tenantId: params.tenantId },
+    where: { id: params.workOrderId },
   });
   if (!workOrder) {
     throw new WorkOrderNotFoundError(params.workOrderId);

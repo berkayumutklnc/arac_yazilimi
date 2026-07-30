@@ -102,10 +102,11 @@ interface FileRequestAuditData {
 }
 
 export interface FileRequestDb {
-  // Güvenlik (bkz. docs/security-audit.md, KRİTİK-2): vehicleId'nin gerçekten
-  // dealerTenantId'ye ait olduğunu doğrulamadan talep ASLA oluşturulmaz.
+  // Güvenlik (bkz. docs/security-audit.md, KRİTİK-2 — ADR 0006 ile artık
+  // otomatik): db, talebi açan DEALER'ın kendi tenant'ına scoped olduğu için
+  // vehicle.findUnique({where:{id}}) yalnızca o dealer'ın araçlarını bulabilir.
   vehicle: {
-    findUnique: (args: { where: { id: string; tenantId: string } }) => Promise<{ id: string } | null>;
+    findUnique: (args: { where: { id: string } }) => Promise<{ id: string } | null>;
   };
   dealerAccount: {
     findFirst: (args: {
@@ -138,9 +139,7 @@ export async function createFileRequest(
   const input = createFileRequestInputSchema.parse(rawInput);
   const dealerTenantId = actingUser.tenantId;
 
-  const vehicle = await db.vehicle.findUnique({
-    where: { id: input.vehicleId, tenantId: dealerTenantId },
-  });
+  const vehicle = await db.vehicle.findUnique({ where: { id: input.vehicleId } });
   if (!vehicle) {
     throw new VehicleNotFoundError(input.vehicleId);
   }

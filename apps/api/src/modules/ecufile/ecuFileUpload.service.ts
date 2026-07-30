@@ -70,10 +70,11 @@ export async function requestEcuFileUpload(
   return { uploadUrl, storageKey };
 }
 
+// tenantId bilinçli olarak yok (bkz. ecuFile.service.ts'teki EcuFileDb notu).
 export interface EcuFileUploadDb extends EcuFileDb {
   ecuFile: EcuFileDb["ecuFile"] & {
     findFirst: (args: {
-      where: { tenantId: string; vehicleId: string; checksum: string };
+      where: { vehicleId: string; checksum: string };
     }) => Promise<{ id: string } | null>;
   };
 }
@@ -94,7 +95,6 @@ export async function confirmEcuFileUpload(
 
   const duplicate = await deps.db.ecuFile.findFirst({
     where: {
-      tenantId: params.tenantId,
       vehicleId: params.vehicleId,
       checksum: actualChecksum,
     },
@@ -105,7 +105,6 @@ export async function confirmEcuFileUpload(
   }
 
   return createEcuFile(deps.db, {
-    tenantId: params.tenantId,
     vehicleId: params.vehicleId,
     fileType: params.fileType,
     storageKey: params.storageKey,

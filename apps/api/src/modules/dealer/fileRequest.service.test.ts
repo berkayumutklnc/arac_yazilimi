@@ -59,7 +59,7 @@ describe("createFileRequest", () => {
     requestedStage: EcuFileType.STAGE1,
   };
 
-  it("vehicleId dealer'ın kendi tenant'ına ait değilse VehicleNotFoundError fırlatır (tenant izolasyonu)", async () => {
+  it("vehicleId dealer'ın kendi tenant'ına ait değilse VehicleNotFoundError fırlatır — tenant filtresi artık db'ye (scoped extension) gömülü", async () => {
     const { db, vehicleFindUnique, fileRequestCreate } = createMockDb();
     vehicleFindUnique.mockResolvedValue(null);
 
@@ -67,6 +67,8 @@ describe("createFileRequest", () => {
       VehicleNotFoundError,
     );
     expect(fileRequestCreate).not.toHaveBeenCalled();
+    const vehicleArgs = vehicleFindUnique.mock.calls[0]?.[0];
+    expect(Object.keys(vehicleArgs?.where ?? {})).toEqual(["id"]);
   });
 
   it("DEALER olmayan bir rol talep açamaz", async () => {

@@ -3,7 +3,6 @@ import { z } from "zod";
 import { EcuFileType } from "../../generated/prisma/enums.js";
 
 export const createEcuFileInputSchema = z.object({
-  tenantId: z.string().min(1),
   vehicleId: z.string().min(1),
   fileType: z.nativeEnum(EcuFileType),
   storageKey: z.string().min(1),
@@ -39,14 +38,12 @@ export class VehicleNotFoundError extends Error {
 
 export interface EcuFileRecord {
   id: string;
-  tenantId: string;
   vehicleId: string;
   fileType: EcuFileType;
 }
 
 export interface EcuFileCreateData {
   id?: string;
-  tenantId: string;
   vehicleId: string;
   fileType: EcuFileType;
   storageKey: string;
@@ -55,12 +52,13 @@ export interface EcuFileCreateData {
   stockRomRef: string;
 }
 
+// tenantId bilinçli olarak yok — db, request başına tenant-scoped oluşturulur
+// (bkz. db/tenantScopedDb.ts, ADR 0006). Vehicle da otomatik-scope listesinde
+// olduğu için `vehicle.findUnique({where:{id}})` zaten yalnızca çağıranın
+// tenant'ındaki aracı bulabilir.
 export interface EcuFileDb {
-  // Güvenlik (bkz. docs/security-audit.md, KRİTİK-1): vehicleId'nin gerçekten
-  // input.tenantId'ye ait olduğunu doğrulamadan bir EcuFile ASLA oluşturulmaz —
-  // aksi halde tenant A, tenant B'nin aracına dosya kaydı iliştirebilir.
   vehicle: {
-    findUnique: (args: { where: { id: string; tenantId: string } }) => Promise<{ id: string } | null>;
+    findUnique: (args: { where: { id: string } }) => Promise<{ id: string } | null>;
   };
   ecuFile: {
     create: (args: { data: EcuFileCreateData }) => Promise<{ id: string }>;
@@ -71,9 +69,7 @@ export interface EcuFileDb {
 export async function createEcuFile(db: EcuFileDb, rawInput: CreateEcuFileInput) {
   const input = createEcuFileInputSchema.parse(rawInput);
 
-  const vehicle = await db.vehicle.findUnique({
-    where: { id: input.vehicleId, tenantId: input.tenantId },
-  });
+  const vehicle = await db.vehicle.findUnique({ where: { id: input.vehicleId } });
   if (!vehicle) {
     throw new VehicleNotFoundError(input.vehicleId);
   }
@@ -88,7 +84,6 @@ export async function createEcuFile(db: EcuFileDb, rawInput: CreateEcuFileInput)
     return db.ecuFile.create({
       data: {
         id,
-        tenantId: input.tenantId,
         vehicleId: input.vehicleId,
         fileType: input.fileType,
         storageKey: input.storageKey,
@@ -107,7 +102,6 @@ export async function createEcuFile(db: EcuFileDb, rawInput: CreateEcuFileInput)
   const isValidStockRom =
     stockRom !== null &&
     stockRom.fileType === EcuFileType.ORIGINAL_STOCK &&
-    stockRom.tenantId === input.tenantId &&
     stockRom.vehicleId === input.vehicleId;
 
   if (!isValidStockRom) {
@@ -116,7 +110,6 @@ export async function createEcuFile(db: EcuFileDb, rawInput: CreateEcuFileInput)
 
   return db.ecuFile.create({
     data: {
-      tenantId: input.tenantId,
       vehicleId: input.vehicleId,
       fileType: input.fileType,
       storageKey: input.storageKey,

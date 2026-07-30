@@ -18,20 +18,19 @@ const ALLOWED_DOWNLOAD_ROLES: readonly Role[] = [Role.OWNER, Role.ENGINEER];
 
 interface EcuFileDownloadRecord {
   id: string;
-  tenantId: string;
   storageKey: string;
 }
 
+// tenantId bilinçli olarak yok — db, request başına tenant-scoped oluşturulur
+// (bkz. db/tenantScopedDb.ts, ADR 0006). EcuFileDownloadAuditLog de
+// otomatik-scope listesinde olduğu için create data'sında tenantId gerekmez.
 export interface EcuFileDownloadDb {
   ecuFile: {
-    findUnique: (args: {
-      where: { id: string; tenantId: string };
-    }) => Promise<EcuFileDownloadRecord | null>;
+    findUnique: (args: { where: { id: string } }) => Promise<EcuFileDownloadRecord | null>;
   };
   ecuFileDownloadAuditLog: {
     create: (args: {
       data: {
-        tenantId: string;
         ecuFileId: string;
         downloadedBy: string;
         downloadedByRole: Role;
@@ -45,7 +44,6 @@ export interface EcuFileDownloadStoragePort {
 }
 
 export interface DownloadEcuFileParams {
-  tenantId: string;
   ecuFileId: string;
   requestedBy: { id: string; role: Role };
 }
@@ -58,9 +56,7 @@ export async function downloadEcuFile(
     throw new ForbiddenRoleError(params.requestedBy.role);
   }
 
-  const file = await deps.db.ecuFile.findUnique({
-    where: { id: params.ecuFileId, tenantId: params.tenantId },
-  });
+  const file = await deps.db.ecuFile.findUnique({ where: { id: params.ecuFileId } });
 
   if (!file) {
     throw new EcuFileNotFoundError(params.ecuFileId);
@@ -70,7 +66,6 @@ export async function downloadEcuFile(
 
   await deps.db.ecuFileDownloadAuditLog.create({
     data: {
-      tenantId: params.tenantId,
       ecuFileId: file.id,
       downloadedBy: params.requestedBy.id,
       downloadedByRole: params.requestedBy.role,

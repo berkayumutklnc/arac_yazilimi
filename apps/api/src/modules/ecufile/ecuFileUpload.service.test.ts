@@ -93,7 +93,6 @@ describe("confirmEcuFileUpload", () => {
       confirmEcuFileUpload(
         { db, storage },
         {
-          tenantId,
           vehicleId,
           fileType: "STAGE1",
           storageKey,
@@ -107,7 +106,7 @@ describe("confirmEcuFileUpload", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("aynı tenant+araç+hash için mükerrer dosya tespit edilirse reddeder", async () => {
+  it("aynı araç+hash için mükerrer dosya tespit edilirse reddeder — tenant filtresi artık db'ye gömülü", async () => {
     const { storage, readObjectSha256 } = createMockStorage();
     readObjectSha256.mockResolvedValue("same-hash");
     const { db, create, findFirst } = createMockDb();
@@ -117,7 +116,6 @@ describe("confirmEcuFileUpload", () => {
       confirmEcuFileUpload(
         { db, storage },
         {
-          tenantId,
           vehicleId,
           fileType: "STAGE1",
           storageKey,
@@ -128,8 +126,10 @@ describe("confirmEcuFileUpload", () => {
       ),
     ).rejects.toBeInstanceOf(DuplicateEcuFileError);
     expect(findFirst).toHaveBeenCalledWith({
-      where: { tenantId, vehicleId, checksum: "same-hash" },
+      where: { vehicleId, checksum: "same-hash" },
     });
+    const callArgs = findFirst.mock.calls[0]?.[0];
+    expect(Object.keys(callArgs?.where ?? {}).sort()).toEqual(["checksum", "vehicleId"].sort());
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -140,7 +140,6 @@ describe("confirmEcuFileUpload", () => {
     findFirst.mockResolvedValue(null);
     findUnique.mockResolvedValue({
       id: "stock-1",
-      tenantId,
       vehicleId,
       fileType: "ORIGINAL_STOCK",
     });
@@ -149,7 +148,6 @@ describe("confirmEcuFileUpload", () => {
     await confirmEcuFileUpload(
       { db, storage },
       {
-        tenantId,
         vehicleId,
         fileType: "STAGE1",
         storageKey,
@@ -168,5 +166,7 @@ describe("confirmEcuFileUpload", () => {
         uploadedBy,
       }),
     });
+    const createArgs = create.mock.calls[0]?.[0];
+    expect(createArgs?.data).not.toHaveProperty("tenantId");
   });
 });

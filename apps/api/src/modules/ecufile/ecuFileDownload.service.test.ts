@@ -8,7 +8,6 @@ import {
 } from "./ecuFileDownload.service.js";
 import { Role } from "../../generated/prisma/enums.js";
 
-const tenantId = "tenant-1";
 const ecuFileId = "file-1";
 
 function createMockDeps() {
@@ -32,10 +31,7 @@ describe("downloadEcuFile", () => {
         createMockDeps();
 
       await expect(
-        downloadEcuFile(
-          { db, storage },
-          { tenantId, ecuFileId, requestedBy: { id: "user-1", role } },
-        ),
+        downloadEcuFile({ db, storage }, { ecuFileId, requestedBy: { id: "user-1", role } }),
       ).rejects.toBeInstanceOf(ForbiddenRoleError);
       expect(findUnique).not.toHaveBeenCalled();
       expect(createPresignedDownloadUrl).not.toHaveBeenCalled();
@@ -50,51 +46,56 @@ describe("downloadEcuFile", () => {
     await expect(
       downloadEcuFile(
         { db, storage },
-        { tenantId, ecuFileId, requestedBy: { id: "user-1", role: Role.ENGINEER } },
+        { ecuFileId, requestedBy: { id: "user-1", role: Role.ENGINEER } },
       ),
     ).rejects.toBeInstanceOf(EcuFileNotFoundError);
     expect(auditCreate).not.toHaveBeenCalled();
   });
 
   it.each([Role.OWNER, Role.ENGINEER])(
-    "%s rolü geçerli dosyayı indirebilir ve audit log kaydı yazılır (kim/ne zaman/rol)",
+    "%s rolü geçerli dosyayı indirebilir ve audit log kaydı yazılır (kim/ne zaman/rol) — tenantId artık extension'dan gelir",
     async (role) => {
       const { db, storage, findUnique, auditCreate, createPresignedDownloadUrl } =
         createMockDeps();
-      findUnique.mockResolvedValue({ id: ecuFileId, tenantId, storageKey: "tenant-1/file.bin" });
+      findUnique.mockResolvedValue({ id: ecuFileId, storageKey: "tenant-1/file.bin" });
       createPresignedDownloadUrl.mockResolvedValue({
         downloadUrl: "https://s3.example.com/download",
       });
 
       const result = await downloadEcuFile(
         { db, storage },
-        { tenantId, ecuFileId, requestedBy: { id: "user-1", role } },
+        { ecuFileId, requestedBy: { id: "user-1", role } },
       );
 
       expect(result.downloadUrl).toBe("https://s3.example.com/download");
       expect(auditCreate).toHaveBeenCalledWith({
         data: {
-          tenantId,
           ecuFileId,
           downloadedBy: "user-1",
           downloadedByRole: role,
         },
       });
+      const auditArgs = auditCreate.mock.calls[0]?.[0];
+      expect(Object.keys(auditArgs?.data ?? {}).sort()).toEqual(
+        ["downloadedBy", "downloadedByRole", "ecuFileId"].sort(),
+      );
     },
   );
 
-  it("findUnique tenant izolasyonuyla çağrılır", async () => {
+  it("findUnique yalnızca id ile çağrılır — tenant filtresi artık db'ye gömülü", async () => {
     const { db, storage, findUnique, createPresignedDownloadUrl } = createMockDeps();
-    findUnique.mockResolvedValue({ id: ecuFileId, tenantId, storageKey: "key" });
+    findUnique.mockResolvedValue({ id: ecuFileId, storageKey: "key" });
     createPresignedDownloadUrl.mockResolvedValue({
       downloadUrl: "https://s3.example.com/x",
     });
 
     await downloadEcuFile(
       { db, storage },
-      { tenantId, ecuFileId, requestedBy: { id: "user-1", role: Role.OWNER } },
+      { ecuFileId, requestedBy: { id: "user-1", role: Role.OWNER } },
     );
 
-    expect(findUnique).toHaveBeenCalledWith({ where: { id: ecuFileId, tenantId } });
+    expect(findUnique).toHaveBeenCalledWith({ where: { id: ecuFileId } });
+    const callArgs = findUnique.mock.calls[0]?.[0];
+    expect(Object.keys(callArgs?.where ?? {})).toEqual(["id"]);
   });
 });
