@@ -7,12 +7,18 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "lint": "eslint src"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "seed:e2e": "tsx scripts/seedE2e.ts",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:related": "vitest related --run"
   },
   "dependencies": {
     "@arac-yazilim/shared": "*",
-    "@fastify/jwt": "^10.2.1",
+    "@fastify/cookie": "^11.1.2",
+    "@node-rs/argon2": "^2.0.2",
     "@prisma/client": "^6.0.0",
+    "fast-jwt": "^6.2.4",
     "fastify": "^5.0.0",
     "zod": "^3.24.0"
   },
