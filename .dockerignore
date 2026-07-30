@@ -1,0 +1,22 @@
+# Kök build context (apps/api, apps/web) için — bkz. docs/adr/0015. Sır/
+# gereksiz dosya imaja ASLA girmez.
+.git
+.github
+docs
+*.md
+
+**/node_modules
+**/.next
+**/dist
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/coverage
+
+.env
+.env.*
+
+apps/diag-service
+apps/web/e2e
+apps/web/playwright-report
+apps/web/test-results

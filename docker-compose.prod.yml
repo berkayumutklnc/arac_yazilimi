@@ -1,0 +1,242 @@
+# Tek VPS üretim topolojisi — bkz. docs/adr/0015-production-deployment-architecture.md,
+# docs/runbook.md. Yerel geliştirme docker-compose.yml'den (yalnızca MinIO)
+# TAMAMEN AYRI bir dosya — bu, `docker compose -f docker-compose.prod.yml ...`
+# ile açıkça belirtilerek çalıştırılır.
+#
+# Ağ topolojisi: yalnızca `caddy` host'a port yayınlar (80/443). `postgres`/
+# `minio`/`diag-service` host'a hiç açılmaz — yalnızca `data` ağı üzerinden
+# servis adıyla erişilir (savunma derinliği).
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+networks:
+  edge:
+  data:
+
+volumes:
+  postgres-data:
+  minio-data:
+  caddy-data:
+  caddy-config:
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "80:80"
+      - "443:443"
+    networks: [edge]
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN gerekli — .env.production.example'a bakın}
+      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN gerekli — .env.production.example'a bakın}
+    healthcheck:
+      # Caddy'nin yerel yönetim API'si (2019) — Caddy sürecinin gerçekten
+      # ayakta/yapılandırmayı yüklediğini doğrular.
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  web:
+    image: ${GHCR_NAMESPACE}-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [edge]
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  api:
+    image: ${GHCR_NAMESPACE}-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [edge, data]
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      S3_ENDPOINT: http://minio:9000
+      S3_FORCE_PATH_STYLE: "true"
+      DIAG_SERVICE_URL: http://diag-service:8000
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      diag-service:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  diag-service:
+    image: ${GHCR_NAMESPACE}-diag-service:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [data]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [data]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  # NOT: :latest yerine belirli bir RELEASE.* tag'ine sabitlenmeli —
+  # implementasyon/kurulum sırasında güncel bir sürüm seçilip burada
+  # güncellenmeli (bkz. docs/adr/0015).
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [data]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  # Tek seferlik kurulum: iki bucket + private ACL + backups bucket'ına 30
+  # günlük lifecycle (expiry) kuralı. İdempotent — her `up` çalıştığında
+  # sorunsuz tekrar çalışır (bkz. docs/runbook.md).
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    logging: *default-logging
+    networks: [data]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" &&
+      mc mb --ignore-existing local/arac-yazilim-ecu-files &&
+      mc mb --ignore-existing local/arac-yazilim-backups &&
+      mc anonymous set none local/arac-yazilim-ecu-files &&
+      mc anonymous set none local/arac-yazilim-backups &&
+      mc ilm add --expire-days 30 local/arac-yazilim-backups || true
+      "
+
+  # Gecelik pg_dump → MinIO (bkz. ops/backup/, scripts/backup.sh, docs/runbook.md).
+  backup:
+    build:
+      context: .
+      dockerfile: ops/backup/Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
+    networks: [data]
+    environment:
+      PGHOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M

@@ -3,6 +3,7 @@ import { PrismaClient } from "./generated/prisma/client.js";
 import { buildApp } from "./app.js";
 import { S3EcuFileStorage } from "./storage/s3EcuFileStorage.js";
 import { DiagServiceClient } from "./diagService/diagServiceClient.js";
+import { ConsoleEmailSender } from "./notifications/emailSender.js";
 
 const jwtSecret = process.env.JWT_ACCESS_SECRET;
 if (!jwtSecret) {
@@ -41,11 +42,29 @@ const diagServiceClient = new DiagServiceClient({
   baseUrl: process.env.DIAG_SERVICE_URL ?? "http://localhost:8000",
 });
 
+// bkz. docs/adr/0011-invitation-model.md — davet linkleri bu adresle kurulur
+// (apps/web'in çalıştığı adres). Gerçek e-posta sağlayıcısı gelene kadar
+// ConsoleEmailSender terminale yazar.
+const webAppBaseUrl = process.env.WEB_APP_BASE_URL;
+if (!webAppBaseUrl) {
+  throw new Error(
+    "WEB_APP_BASE_URL ortam değişkeni zorunlu — bkz. apps/api/.env.example. Davet linkleri bu adrese göre kurulur.",
+  );
+}
+const emailSender = new ConsoleEmailSender();
+
+// Üretimde yapılandırılmış (JSON) pino log — bkz. ADR 0015. Testler/yerel
+// geliştirme logLevel vermez, buildApp logger'ı tamamen kapalı bırakır.
+const logLevel = process.env.NODE_ENV === "production" ? (process.env.LOG_LEVEL ?? "info") : undefined;
+
 const prisma = new PrismaClient();
-const app = buildApp(prisma, { jwtSecret, storage, diagServiceClient });
+const app = buildApp(prisma, { jwtSecret, storage, diagServiceClient, emailSender, webAppBaseUrl, logLevel });
 
 const port = Number(process.env.PORT ?? 3001);
-app.listen({ port }).catch((err) => {
+// host 0.0.0.0 ZORUNLU — Fastify'ın varsayılanı (127.0.0.1) container
+// içinden yalnızca kendi loopback'ine bağlanır, Caddy/başka container'lar
+// hiç ulaşamaz (bkz. ADR 0015, docker-compose.prod.yml).
+app.listen({ port, host: "0.0.0.0" }).catch((err) => {
   app.log.error(err);
   process.exit(1);
 });

@@ -1,5 +1,6 @@
 import type { Role } from "../../generated/prisma/enums.js";
 import { generateRefreshToken, hashRefreshToken, signAccessToken } from "./authToken.js";
+import { revokeAllRefreshTokensForUser } from "./refreshTokenRevocation.js";
 
 export class InvalidRefreshTokenError extends Error {
   constructor() {
@@ -62,10 +63,7 @@ export async function refreshTokens(
     // Çalıntı token belirtisi (reuse detection): daha önce rotasyonla devre
     // dışı bırakılmış bir token tekrar sunuluyor — kullanıcının tüm aktif
     // refresh token'ları iptal edilir.
-    await db.refreshToken.updateMany({
-      where: { userId: record.userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    await revokeAllRefreshTokensForUser(db, record.userId);
     throw new InvalidRefreshTokenError();
   }
 

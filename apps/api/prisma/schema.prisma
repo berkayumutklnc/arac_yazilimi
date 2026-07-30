@@ -1,9 +1,14 @@
 // Prisma schema — Faz 1 MVP
-// Karar notları: ../../docs/adr/0001-prisma-tenant-isolation.md, ../../docs/adr/0002-ecufile-stockromref-workorder-compliance.md, ../../docs/adr/0003-workorder-status-machine-audit-log.md, ../../docs/adr/0004-ecufile-upload-download-policy-audit.md, ../../docs/adr/0005-dealer-hub-file-request-credit.md, ../../docs/adr/0006-auth-tenant-scoping.md, ../../docs/adr/0007-credit-deduction-locking-strategy.md, ../../docs/adr/0008-access-denied-audit-log.md, ../../docs/adr/0009-workorder-diagnostic-report.md
+// Karar notları: ../../docs/adr/0001-prisma-tenant-isolation.md, ../../docs/adr/0002-ecufile-stockromref-workorder-compliance.md, ../../docs/adr/0003-workorder-status-machine-audit-log.md, ../../docs/adr/0004-ecufile-upload-download-policy-audit.md, ../../docs/adr/0005-dealer-hub-file-request-credit.md, ../../docs/adr/0006-auth-tenant-scoping.md, ../../docs/adr/0007-credit-deduction-locking-strategy.md, ../../docs/adr/0008-access-denied-audit-log.md, ../../docs/adr/0009-workorder-diagnostic-report.md, ../../docs/adr/0010-super-admin-platform-tenant.md, ../../docs/adr/0011-invitation-model.md, ../../docs/adr/0012-tenant-user-management-audit.md, ../../docs/adr/0013-dealer-account-linking-status.md, ../../docs/adr/0014-invoice-billing-epic.md, ../../docs/adr/0015-production-deployment-architecture.md
 
+// "native" yerel geliştirme (bu makinede Windows) içindir; linux-musl-openssl-3.0.x
+// üretim Docker imajı (node:22-alpine, bkz. docs/adr/0015) için — Alpine musl
+// libc kullanır, glibc hedefleriyle uyumlu değildir. İkisi de olmadan üretim
+// container'ı "query engine bulunamadı" hatasıyla başlangıçta çöker.
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider      = "prisma-client"
+  output        = "../src/generated/prisma"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -16,6 +21,9 @@ enum Role {
   ENGINEER
   RECEPTIONIST
   DEALER
+  // Kiracılar-üstü platform yöneticisi (bkz. ADR 0010) — User.tenantId yine de
+  // NOT NULL, sabit slug'lı ("__platform__") bir placeholder Tenant'a bağlanır.
+  SUPER_ADMIN
 }
 
 // Ana zincir sıkı doğrusal (bkz. ADR 0003): DRAFT -> ACCEPTED -> IN_PROGRESS ->
@@ -42,12 +50,25 @@ enum EcuFileType {
   CUSTOM
 }
 
+// bkz. ADR 0014. DRAFT -> ISSUED -> {PAID, VOID}; kısmi ödeme takibi kapsam dışı.
 enum InvoiceStatus {
   DRAFT
   ISSUED
-  PARTIALLY_PAID
   PAID
-  CANCELLED
+  VOID
+}
+
+enum WorkOrderItemType {
+  SERVICE
+  PART
+}
+
+// Türkiye KDV dilimleri (bkz. ADR 0014).
+enum VatRate {
+  RATE_0
+  RATE_1
+  RATE_10
+  RATE_20
 }
 
 // Hub/dealer dosya talebi yaşam döngüsü (bkz. ADR 0005): dallanmalı durum makinesi,
@@ -71,6 +92,12 @@ enum AccessDeniedResource {
 enum AccessDeniedReason {
   FORBIDDEN_ROLE
   NOT_FOUND
+}
+
+// Kiracı-içi kullanıcı yönetimi audit log'unun eylem türleri (bkz. ADR 0012).
+enum UserManagementAction {
+  ROLE_CHANGED
+  DEACTIVATED
 }
 
 // diag-service'in iki ucuna karşılık gelir (bkz. ADR 0009,
@@ -99,6 +126,9 @@ model Tenant {
   ecuFileDownloadAuditLogs   EcuFileDownloadAuditLog[]
   accessDeniedAuditLogs      AccessDeniedAuditLog[]
   workOrderDiagnosticReports WorkOrderDiagnosticReport[]
+  invitations                Invitation[]
+  userManagementAuditLogs    UserManagementAuditLog[]
+  invoiceStatusAuditLogs     InvoiceStatusAuditLog[]
 
   dealerAccountsAsHub    DealerAccount[] @relation("HubAccounts")
   dealerAccountsAsDealer DealerAccount[] @relation("DealerAccounts")
@@ -107,15 +137,19 @@ model Tenant {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  tenantId     String
-  tenant       Tenant   @relation(fields: [tenantId], references: [id])
-  email        String
-  passwordHash String
-  role         Role
-  createdAt    DateTime @default(now())
+  id            String    @id @default(uuid())
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  email         String
+  passwordHash  String
+  role          Role
+  // NULL = aktif. Soft-flag (Customer.deletedAt deseni) — satır silinmez
+  // (bkz. ADR 0012). Deaktivasyon anında tüm refresh token'ları iptal eder.
+  deactivatedAt DateTime?
+  createdAt     DateTime  @default(now())
 
-  refreshTokens RefreshToken[]
+  refreshTokens               RefreshToken[]
+  managementAuditLogsAsTarget UserManagementAuditLog[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -133,6 +167,46 @@ model RefreshToken {
   createdAt    DateTime  @default(now())
 
   @@index([userId])
+}
+
+// bkz. ADR 0011. Ham token asla saklanmaz — RefreshToken deseniyle aynı
+// (yalnızca SHA-256 hash'i). Tenant-içi davetler (`request.tenantDb.invitation`)
+// ve SUPER_ADMIN'in yeni-tenant-için-ilk-daveti/public redemption (ham
+// `prisma.invitation.*`) aynı modeli paylaşır.
+model Invitation {
+  id         String    @id @default(uuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id])
+  email      String
+  role       Role
+  tokenHash  String    @unique
+  invitedBy  String
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  // v1'de hiç set edilmez — ileride bir revoke endpoint'i migration'sız eklenebilsin diye şimdiden var.
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+// bkz. ADR 0012. AccessDeniedAuditLog ile aynı "ayrı model + saf logX(db,params)"
+// deseni — ama targetUserId burada bilinçli olarak FK'li (hedef her zaman
+// aynı tenant içindeki gerçek bir User).
+model UserManagementAuditLog {
+  id           String               @id @default(uuid())
+  tenantId     String
+  tenant       Tenant               @relation(fields: [tenantId], references: [id])
+  actorId      String
+  targetUserId String
+  targetUser   User                 @relation(fields: [targetUserId], references: [id])
+  action       UserManagementAction
+  fromRole     Role?
+  toRole       Role?
+  createdAt    DateTime             @default(now())
+
+  @@index([tenantId])
+  @@index([targetUserId])
 }
 
 model Customer {
@@ -198,13 +272,28 @@ model WorkOrder {
   @@index([tenantId])
 }
 
+// bkz. ADR 0014. serviceTypeId bilinçli olarak opsiyonel — bugün hiçbir route
+// ServiceType listelemiyor/oluşturmuyor; hizmet/parça ayrımı itemType +
+// serbest metin description ile yapılıyor. İş emri DELIVERED/CLOSED/CANCELLED
+// olduğunda kalemler kilitlenir (bkz. workOrderItem.service.ts).
 model WorkOrderItem {
-  id            String      @id @default(uuid())
-  workOrderId   String
-  workOrder     WorkOrder   @relation(fields: [workOrderId], references: [id])
-  serviceTypeId String
-  serviceType   ServiceType @relation(fields: [serviceTypeId], references: [id])
-  priceKurus    Int
+  id             String            @id @default(uuid())
+  workOrderId    String
+  workOrder      WorkOrder         @relation(fields: [workOrderId], references: [id])
+  itemType       WorkOrderItemType
+  description    String
+  serviceTypeId  String?
+  serviceType    ServiceType?      @relation(fields: [serviceTypeId], references: [id])
+  quantity       Int
+  unitPriceKurus Int
+  vatRate        VatRate
+  // quantity * unitPriceKurus — iki tam sayının çarpımı, yuvarlama gerekmez.
+  netAmountKurus Int
+  // round_half_up(netAmountKurus * vatRate% / 100) — kesirli kuruş ortaya
+  // çıkabilecek tek adım (bkz. invoiceMath.ts).
+  vatAmountKurus Int
+  lineTotalKurus Int
+  createdAt      DateTime          @default(now())
 
   @@index([workOrderId])
 }
@@ -319,14 +408,29 @@ model WorkOrderDiagnosticReport {
   @@index([workOrderId])
 }
 
+// bkz. ADR 0013. status'un varlığından önce bir DealerAccount satırının
+// varlığı TEK BAŞINA "bağlantı kuruldu" demekti — artık hub OWNER'ı önerir
+// (PENDING), yalnızca dealer OWNER'ı onaylar/reddeder (ACTIVE/REJECTED).
+// @@unique([hubTenantId, dealerTenantId]) değişmedi — artık "bu çift için
+// (durumu ne olursa olsun) tek kayıt" anlamına gelir (tekrar öneri engeli).
+enum DealerAccountStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+}
+
 model DealerAccount {
-  id                 String   @id @default(uuid())
+  id                 String              @id @default(uuid())
   hubTenantId        String
-  hubTenant          Tenant   @relation("HubAccounts", fields: [hubTenantId], references: [id])
+  hubTenant          Tenant              @relation("HubAccounts", fields: [hubTenantId], references: [id])
   dealerTenantId     String
-  dealerTenant       Tenant   @relation("DealerAccounts", fields: [dealerTenantId], references: [id])
-  creditBalanceKurus Int      @default(0)
-  createdAt          DateTime @default(now())
+  dealerTenant       Tenant              @relation("DealerAccounts", fields: [dealerTenantId], references: [id])
+  status             DealerAccountStatus @default(PENDING)
+  requestedBy        String
+  approvedBy         String?
+  respondedAt        DateTime?
+  creditBalanceKurus Int                 @default(0)
+  createdAt          DateTime            @default(now())
 
   fileRequests FileRequest[]
   transactions DealerCreditTransaction[]
@@ -394,28 +498,42 @@ model FileRequestStatusAuditLog {
   @@index([fileRequestId])
 }
 
+// bkz. ADR 0014. invoiceNumber yalnızca ISSUED'da atanır (DRAFT'ta null) —
+// Postgres'te NULL'lar @@unique dışı tutulduğu için çoklu DRAFT sorun değil.
 model Invoice {
-  id          String        @id @default(uuid())
-  tenantId    String
-  tenant      Tenant        @relation(fields: [tenantId], references: [id])
-  workOrderId String        @unique
-  workOrder   WorkOrder     @relation(fields: [workOrderId], references: [id])
-  status      InvoiceStatus @default(DRAFT)
-  totalKurus  Int
-  createdAt   DateTime      @default(now())
+  id            String        @id @default(uuid())
+  tenantId      String
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  workOrderId   String        @unique
+  workOrder     WorkOrder     @relation(fields: [workOrderId], references: [id])
+  status        InvoiceStatus @default(DRAFT)
+  invoiceNumber String?
+  issuedAt      DateTime?
+  voidedAt      DateTime?
+  totalKurus    Int
+  createdAt     DateTime      @default(now())
 
-  lines    InvoiceLine[]
-  payments Payment[]
+  lines           InvoiceLine[]
+  payments        Payment[]
+  statusAuditLogs InvoiceStatusAuditLog[]
 
+  @@unique([tenantId, invoiceNumber])
   @@index([tenantId])
 }
 
+// WorkOrderItem'ın oluşturma anındaki ANLIK GÖRÜNTÜSÜ — sonradan kalem
+// fiyatı/KDV'si değişse de fatura sabit kalır (bkz. ADR 0014).
 model InvoiceLine {
-  id          String  @id @default(uuid())
-  invoiceId   String
-  invoice     Invoice @relation(fields: [invoiceId], references: [id])
-  description String
-  amountKurus Int
+  id             String  @id @default(uuid())
+  invoiceId      String
+  invoice        Invoice @relation(fields: [invoiceId], references: [id])
+  description    String
+  quantity       Int
+  unitPriceKurus Int
+  vatRate        VatRate
+  netAmountKurus Int
+  vatAmountKurus Int
+  lineTotalKurus Int
 
   @@index([invoiceId])
 }
@@ -427,5 +545,33 @@ model Payment {
   amountKurus Int
   paidAt      DateTime @default(now())
 
+  @@index([invoiceId])
+}
+
+// Tenant+yıl başına atomik, kilitli fatura sıra numarası sayacı — ADR 0007'nin
+// DealerAccount kilitleme deseniyle birebir aynı (bkz. invoiceNumber.ts).
+model InvoiceCounter {
+  tenantId   String
+  year       Int
+  lastNumber Int    @default(0)
+
+  @@id([tenantId, year])
+}
+
+// WorkOrderStatusAuditLog ile aynı desen (bkz. ADR 0014, ADR 0003).
+model InvoiceStatusAuditLog {
+  id         String        @id @default(uuid())
+  tenantId   String
+  tenant     Tenant        @relation(fields: [tenantId], references: [id])
+  invoiceId  String
+  invoice    Invoice       @relation(fields: [invoiceId], references: [id])
+  fromStatus InvoiceStatus
+  toStatus   InvoiceStatus
+  // Yalnızca VOID'de zorunlu (rework/iptal deseniyle aynı, bkz. ADR 0003).
+  reason     String?
+  changedBy  String
+  changedAt  DateTime      @default(now())
+
+  @@index([tenantId])
   @@index([invoiceId])
 }

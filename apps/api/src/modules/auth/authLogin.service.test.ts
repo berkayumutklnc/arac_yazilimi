@@ -50,10 +50,28 @@ describe("login", () => {
       tenantId: "tenant-1",
       passwordHash: await hashPassword(password),
       role: Role.OWNER,
+      deactivatedAt: null,
     });
 
     await expect(
       login(db, jwtSecret, { tenantSlug, email, password: "wrong-password" }),
+    ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    expect(refreshTokenCreate).not.toHaveBeenCalled();
+  });
+
+  it("deaktive edilmiş kullanıcı için InvalidCredentialsError fırlatır (aynı generic mesaj — enumeration direnci)", async () => {
+    const { db, tenantFindUnique, userFindUnique, refreshTokenCreate } = createMockDb();
+    tenantFindUnique.mockResolvedValue({ id: "tenant-1" });
+    userFindUnique.mockResolvedValue({
+      id: "user-1",
+      tenantId: "tenant-1",
+      passwordHash: await hashPassword(password),
+      role: Role.OWNER,
+      deactivatedAt: new Date(),
+    });
+
+    await expect(
+      login(db, jwtSecret, { tenantSlug, email, password }),
     ).rejects.toBeInstanceOf(InvalidCredentialsError);
     expect(refreshTokenCreate).not.toHaveBeenCalled();
   });
@@ -66,6 +84,7 @@ describe("login", () => {
       tenantId: "tenant-1",
       passwordHash: await hashPassword(password),
       role: Role.OWNER,
+      deactivatedAt: null,
     });
 
     const result = await login(db, jwtSecret, { tenantSlug, email, password });

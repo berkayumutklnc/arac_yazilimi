@@ -39,8 +39,37 @@ import {
 } from "../modules/dealer/fileRequestFulfillment.service.js";
 import { buildApp } from "../app.js";
 import type { AppScopedDb } from "../db/tenantScopedDb.js";
-import { signAccessToken } from "../modules/auth/authToken.js";
+import { signAccessToken, verifyAccessToken } from "../modules/auth/authToken.js";
 import { refreshTokens, InvalidRefreshTokenError, type AuthRefreshDb } from "../modules/auth/authRefresh.service.js";
+import {
+  respondToDealerLink,
+  DealerLinkNotFoundError,
+  type DealerLinkDb,
+} from "../modules/dealer/dealerLink.service.js";
+import { topUpDealerCredit, type DealerCreditTopupDb } from "../modules/dealer/dealerCreditTopup.service.js";
+import {
+  redeemInvitation,
+  InvalidInvitationTokenError,
+  type InvitationRedemptionDb,
+} from "../modules/invitation/invitationRedemption.service.js";
+import {
+  changeUserRole,
+  deactivateUser,
+  UserNotFoundError,
+  type UserManagementDb,
+} from "../modules/user/userManagement.service.js";
+import {
+  addWorkOrderItem,
+  removeWorkOrderItem,
+  type WorkOrderItemDb,
+} from "../modules/workorder/workOrderItem.service.js";
+import {
+  issueInvoice,
+  markInvoicePaid,
+  voidInvoice,
+  InvoiceNotFoundError,
+  type InvoiceDb,
+} from "../modules/billing/invoice.service.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 
 const TENANT_B = "tenant-B-attacker";
@@ -150,6 +179,62 @@ describe("Kötü niyetli komşu tenant — mevcut korumalar", () => {
     expect(dealerAccountUpdate).not.toHaveBeenCalled();
     expect(dealerCreditTransactionCreate).not.toHaveBeenCalled();
   });
+
+  it("WorkOrderItem: Tenant B'nin scoped db'si, Tenant A'nın iş emrine kalem ekleyemez/silemez (bkz. ADR 0014)", async () => {
+    const workOrderFindUnique = vi.fn<WorkOrderItemDb["workOrder"]["findUnique"]>();
+    workOrderFindUnique.mockResolvedValue(null); // B'nin tenant-scoped db'si A'nın iş emrini asla döndürmez
+    const itemCreate = vi.fn<WorkOrderItemDb["workOrderItem"]["create"]>();
+    const itemFindUnique = vi.fn<WorkOrderItemDb["workOrderItem"]["findUnique"]>();
+    const itemDelete = vi.fn<WorkOrderItemDb["workOrderItem"]["delete"]>();
+    const db: WorkOrderItemDb = {
+      workOrder: { findUnique: workOrderFindUnique },
+      workOrderItem: { create: itemCreate, findMany: vi.fn(), findUnique: itemFindUnique, delete: itemDelete },
+    };
+
+    await expect(
+      addWorkOrderItem(db, {
+        workOrderId: "wo-belongs-to-A",
+        itemType: "SERVICE",
+        description: "x",
+        quantity: 1,
+        unitPriceKurus: 100,
+        vatRate: "RATE_0",
+      }),
+    ).rejects.toBeInstanceOf(WorkOrderNotFoundError);
+    expect(itemCreate).not.toHaveBeenCalled();
+
+    await expect(removeWorkOrderItem(db, "wo-belongs-to-A", "item-1")).rejects.toBeInstanceOf(
+      WorkOrderNotFoundError,
+    );
+    expect(itemDelete).not.toHaveBeenCalled();
+  });
+
+  it("Invoice: Tenant B'nin scoped db'si, Tenant A'nın faturasını issue/pay/void edemez (bkz. ADR 0014)", async () => {
+    const findUnique = vi.fn<InvoiceDb["invoice"]["findUnique"]>();
+    findUnique.mockResolvedValue(null); // B'nin tenant-scoped db'si A'nın faturasını asla döndürmez
+    const update = vi.fn<InvoiceDb["invoice"]["update"]>();
+    const auditCreate = vi.fn<InvoiceDb["invoiceStatusAuditLog"]["create"]>();
+    const paymentCreate = vi.fn<InvoiceDb["payment"]["create"]>();
+    const db: InvoiceDb = {
+      invoice: { findUnique, update },
+      invoiceLine: { findMany: vi.fn() },
+      invoiceStatusAuditLog: { create: auditCreate },
+      payment: { create: paymentCreate },
+    };
+
+    await expect(
+      issueInvoice(db, { invoiceId: "inv-belongs-to-A", invoiceNumber: "2026-000001", actorId: "attacker" }),
+    ).rejects.toBeInstanceOf(InvoiceNotFoundError);
+    await expect(
+      markInvoicePaid(db, { invoiceId: "inv-belongs-to-A", actorId: "attacker" }),
+    ).rejects.toBeInstanceOf(InvoiceNotFoundError);
+    await expect(
+      voidInvoice(db, { invoiceId: "inv-belongs-to-A", actorId: "attacker", reason: "x" }),
+    ).rejects.toBeInstanceOf(InvoiceNotFoundError);
+    expect(update).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+    expect(paymentCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe("Kötü niyetli komşu tenant — yamalanan zafiyetler", () => {
@@ -251,10 +336,17 @@ describe("Kimlik doğrulama — sahte/geçersiz/başka tenant'ın token'ı (KRİ
     createPresignedDownloadUrl: vi.fn(),
   };
   const unusedDiagServiceClient = { parseDtcFile: vi.fn(), analyzeWotFile: vi.fn() };
+  const unusedEmailSender = { sendInvitationEmail: vi.fn() };
 
   function buildTestApp(scopedDb: AppScopedDb) {
     const prisma = { $extends: () => scopedDb } as unknown as PrismaClient;
-    return buildApp(prisma, { jwtSecret, storage: unusedStorage, diagServiceClient: unusedDiagServiceClient });
+    return buildApp(prisma, {
+      jwtSecret,
+      storage: unusedStorage,
+      diagServiceClient: unusedDiagServiceClient,
+      emailSender: unusedEmailSender,
+      webAppBaseUrl: "https://app.example.test",
+    });
   }
 
   it("token hiç yoksa 401 döner", async () => {
@@ -338,6 +430,128 @@ describe("Kimlik doğrulama — sahte/geçersiz/başka tenant'ın token'ı (KRİ
   });
 });
 
+describe("Kötü niyetli komşu tenant — WorkOrderItem/Invoice route'ları (ADR 0014)", () => {
+  const jwtSecret = "route-test-secret-billing";
+  const tenantAWorkOrderId = "wo-a-1";
+  const tenantAInvoiceId = "inv-a-1";
+
+  const unusedStorage = {
+    createPresignedUploadUrl: vi.fn(),
+    readObjectSha256: vi.fn(),
+    createPresignedDownloadUrl: vi.fn(),
+  };
+  const unusedDiagServiceClient = { parseDtcFile: vi.fn(), analyzeWotFile: vi.fn() };
+  const unusedEmailSender = { sendInvitationEmail: vi.fn() };
+
+  function buildTestApp(scopedDb: AppScopedDb) {
+    const prisma = {
+      $extends: () => scopedDb,
+      $transaction: (fn: (tx: unknown) => unknown) => fn(scopedDb),
+    } as unknown as PrismaClient;
+    return buildApp(prisma, {
+      jwtSecret,
+      storage: unusedStorage,
+      diagServiceClient: unusedDiagServiceClient,
+      emailSender: unusedEmailSender,
+      webAppBaseUrl: "https://app.example.test",
+    });
+  }
+
+  function tokenForTenantB() {
+    return signAccessToken({ userId: "user-b", tenantId: TENANT_B, role: Role.OWNER }, jwtSecret);
+  }
+
+  it("GEÇERLİ ama başka bir tenant'ın (Tenant B) token'ıyla Tenant A'nın iş emrine kalem eklenemez — 404", async () => {
+    const workOrderFindUnique = vi.fn<AppScopedDb["workOrder"]["findUnique"]>();
+    workOrderFindUnique.mockResolvedValue(null);
+    const scopedDb = {
+      workOrder: { findUnique: workOrderFindUnique },
+      workOrderItem: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
+    } as unknown as AppScopedDb;
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/work-orders/${tenantAWorkOrderId}/items`,
+      headers: { authorization: `Bearer ${tokenForTenantB()}` },
+      payload: { itemType: "SERVICE", description: "x", quantity: 1, unitPriceKurus: 100, vatRate: "RATE_0" },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("GEÇERLİ ama başka bir tenant'ın (Tenant B) token'ıyla Tenant A'nın iş emrinden kalem silinemez — 404", async () => {
+    const workOrderFindUnique = vi.fn<AppScopedDb["workOrder"]["findUnique"]>();
+    workOrderFindUnique.mockResolvedValue(null);
+    const scopedDb = {
+      workOrder: { findUnique: workOrderFindUnique },
+      workOrderItem: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
+    } as unknown as AppScopedDb;
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/work-orders/${tenantAWorkOrderId}/items/item-1`,
+      headers: { authorization: `Bearer ${tokenForTenantB()}` },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it.each([
+    ["POST", "issue"],
+    ["POST", "pay"],
+    ["POST", "void"],
+  ] as const)(
+    "GEÇERLİ ama başka bir tenant'ın (Tenant B) token'ıyla Tenant A'nın faturası %s /invoices/:id/%s edilemez — 404",
+    async (method, action) => {
+      const invoiceFindUnique = vi.fn<AppScopedDb["invoice"]["findUnique"]>();
+      invoiceFindUnique.mockResolvedValue(null);
+      const scopedDb = {
+        invoice: { findUnique: invoiceFindUnique, update: vi.fn() },
+        invoiceLine: { findMany: vi.fn() },
+        invoiceStatusAuditLog: { create: vi.fn() },
+        payment: { create: vi.fn() },
+        // issue route'u issueInvoiceTransactional üzerinden prisma.$transaction
+        // kullanır (bkz. invoiceTransactional.ts) — o yolun tx'i $executeRaw/
+        // $queryRaw'ı da (sayaç ayırma) çağırır, fatura bulunamadan önce.
+        $executeRaw: vi.fn().mockResolvedValue(1),
+        $queryRaw: vi.fn().mockResolvedValue([{ lastNumber: 0 }]),
+      } as unknown as AppScopedDb;
+      const app = buildTestApp(scopedDb);
+
+      const response = await app.inject({
+        method,
+        url: `/invoices/${tenantAInvoiceId}/${action}`,
+        headers: { authorization: `Bearer ${tokenForTenantB()}` },
+        payload: action === "void" ? { reason: "x" } : undefined,
+      });
+
+      expect(response.statusCode).toBe(404);
+    },
+  );
+
+  it("GEÇERLİ ama başka bir tenant'ın (Tenant B) token'ıyla Tenant A'nın faturası görüntülenemez — 404", async () => {
+    const invoiceFindUnique = vi.fn<AppScopedDb["invoice"]["findUnique"]>();
+    invoiceFindUnique.mockResolvedValue(null);
+    const scopedDb = {
+      invoice: { findUnique: invoiceFindUnique, update: vi.fn() },
+      invoiceLine: { findMany: vi.fn() },
+      invoiceStatusAuditLog: { create: vi.fn() },
+      payment: { create: vi.fn() },
+    } as unknown as AppScopedDb;
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/work-orders/${tenantAWorkOrderId}/invoice`,
+      headers: { authorization: `Bearer ${tokenForTenantB()}` },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+});
+
 describe("Kimlik doğrulama — çalınmış (reuse edilen) refresh token", () => {
   it("iptal edilmiş bir refresh token tekrar sunulursa kullanıcının TÜM token'ları iptal edilir ve 401 eşdeğeri hata döner", async () => {
     const findUnique = vi.fn<AuthRefreshDb["refreshToken"]["findUnique"]>();
@@ -365,5 +579,219 @@ describe("Kimlik doğrulama — çalınmış (reuse edilen) refresh token", () =
       where: { userId: "victim-user", revokedAt: null },
       data: { revokedAt: expect.any(Date) as Date },
     });
+  });
+});
+
+describe("Platform-admin (SUPER_ADMIN) izolasyonu (ADR 0010)", () => {
+  const jwtSecret = "admin-security-test-secret";
+  const unusedStorage = {
+    createPresignedUploadUrl: vi.fn(),
+    readObjectSha256: vi.fn(),
+    createPresignedDownloadUrl: vi.fn(),
+  };
+  const unusedDiagServiceClient = { parseDtcFile: vi.fn(), analyzeWotFile: vi.fn() };
+  const unusedEmailSender = { sendInvitationEmail: vi.fn() };
+
+  function buildTestApp(overrides: { tenantFindMany?: ReturnType<typeof vi.fn> } = {}) {
+    const prisma = {
+      $extends: () => ({}),
+      tenant: { findMany: overrides.tenantFindMany ?? vi.fn().mockResolvedValue([]) },
+    } as unknown as PrismaClient;
+    return buildApp(prisma, {
+      jwtSecret,
+      storage: unusedStorage,
+      diagServiceClient: unusedDiagServiceClient,
+      emailSender: unusedEmailSender,
+      webAppBaseUrl: "https://app.example.test",
+    });
+  }
+
+  it("SUPER_ADMIN olmayan bir rol (OWNER) /admin/tenants'a 403 alır — platform-admin route'ları yalnızca SUPER_ADMIN'e açık", async () => {
+    const app = buildTestApp();
+    const ownerToken = signAccessToken({ userId: "owner-1", tenantId: "tenant-A", role: Role.OWNER }, jwtSecret);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/admin/tenants",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("SUPER_ADMIN, WORKSHOP_ROLES gerektiren bir tenant route'una (iş emirleri) 403 alır — platform-admin normal tenant iş akışlarına sızamaz", async () => {
+    const app = buildTestApp();
+    const superAdminToken = signAccessToken(
+      { userId: "admin-1", tenantId: "platform-tenant-1", role: Role.SUPER_ADMIN },
+      jwtSecret,
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/work-orders",
+      headers: { authorization: `Bearer ${superAdminToken}` },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+});
+
+describe("Bayi bağlama + kredi — kendi kendine onay/yükleme engeli (ADR 0013)", () => {
+  const hubTenantId = "hub-security-1";
+  const dealerTenantId = "dealer-security-1";
+  const dealerAccountId = "link-security-1";
+
+  it("hub OWNER'ı kendi önerdiği bağlantıyı onaylayamaz/reddedemez (DealerLinkNotFoundError — 'yokmuş' gibi davranır)", async () => {
+    const findUnique = vi.fn<DealerLinkDb["dealerAccount"]["findUnique"]>();
+    findUnique.mockResolvedValue({
+      id: dealerAccountId,
+      hubTenantId,
+      dealerTenantId,
+      status: "PENDING",
+      requestedBy: "hub-owner-1",
+      approvedBy: null,
+      respondedAt: null,
+      creditBalanceKurus: 0,
+      createdAt: new Date(),
+    });
+    const updateMany = vi.fn<DealerLinkDb["dealerAccount"]["updateMany"]>();
+    const db: DealerLinkDb = {
+      tenant: { findUnique: vi.fn() },
+      dealerAccount: { findFirst: vi.fn(), create: vi.fn(), findUnique, updateMany, findMany: vi.fn() },
+    };
+    const hubOwner = { id: "hub-owner-1", tenantId: hubTenantId, role: Role.OWNER };
+
+    await expect(respondToDealerLink(db, hubOwner, dealerAccountId, true)).rejects.toBeInstanceOf(
+      DealerLinkNotFoundError,
+    );
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it("dealer OWNER'ı (hub tarafı olmayan) kendi bayi hesabına kredi yükleyemez", async () => {
+    const findUnique = vi.fn<DealerCreditTopupDb["dealerAccount"]["findUnique"]>();
+    findUnique.mockResolvedValue({
+      id: dealerAccountId,
+      hubTenantId,
+      dealerTenantId,
+      status: "ACTIVE",
+      creditBalanceKurus: 10_000,
+    });
+    const update = vi.fn<DealerCreditTopupDb["dealerAccount"]["update"]>();
+    const db: DealerCreditTopupDb = {
+      dealerAccount: { findUnique, update },
+      dealerCreditTransaction: { create: vi.fn() },
+    };
+    const dealerOwner = { id: "dealer-owner-1", tenantId: dealerTenantId, role: Role.OWNER };
+
+    await expect(topUpDealerCredit(db, dealerOwner, dealerAccountId, 5000)).rejects.toBeInstanceOf(
+      DealerLinkNotFoundError,
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("Davet enumeration direnci (ADR 0011)", () => {
+  it("Tenant B'nin daveti, Tenant A'nın kullanıcısınca tahmin edilen/yanlış bir token ile redeem edilemez — generic InvalidInvitationTokenError", async () => {
+    // Saldırgan gerçek (Tenant B'ye ait) tokenHash'i bilmiyor — kendi
+    // tahmin ettiği ham token'ın hash'i DB'deki hiçbir kayıtla eşleşmiyor.
+    const findUnique = vi.fn<InvitationRedemptionDb["invitation"]["findUnique"]>();
+    findUnique.mockResolvedValue(null);
+    const db: InvitationRedemptionDb = {
+      invitation: { findUnique, updateMany: vi.fn() },
+      user: { create: vi.fn() },
+    };
+
+    await expect(
+      redeemInvitation(db, "guessed-token-does-not-exist", "saldirgan-sifresi-123"),
+    ).rejects.toBeInstanceOf(InvalidInvitationTokenError);
+  });
+});
+
+describe("Kiracı-içi kullanıcı yönetimi — çapraz tenant erişimi (ADR 0012)", () => {
+  const tenantA = "tenant-A-mgmt";
+  const tenantB = "tenant-B-mgmt-victim";
+
+  function createMockDb() {
+    const findUnique = vi.fn<UserManagementDb["user"]["findUnique"]>();
+    const update = vi.fn<UserManagementDb["user"]["update"]>();
+    const count = vi.fn<UserManagementDb["user"]["count"]>();
+    const auditCreate = vi.fn<UserManagementDb["userManagementAuditLog"]["create"]>();
+    const refreshTokenUpdateMany = vi.fn<UserManagementDb["refreshToken"]["updateMany"]>();
+    const db: UserManagementDb = {
+      user: { findUnique, update, count },
+      userManagementAuditLog: { create: auditCreate },
+      refreshToken: { updateMany: refreshTokenUpdateMany },
+    };
+    return { db, findUnique, update, refreshTokenUpdateMany };
+  }
+
+  it("Tenant A'nın OWNER'ı, Tenant B'ye ait bir kullanıcının rolünü değiştiremez — UserNotFoundError (404 eşdeğeri, 'yokmuş' gibi davranır)", async () => {
+    const { db, findUnique, update } = createMockDb();
+    findUnique.mockResolvedValue({ id: "victim-user", tenantId: tenantB, role: Role.ENGINEER, deactivatedAt: null });
+    const attackerOwner = { id: "attacker-owner", tenantId: tenantA, role: Role.OWNER };
+
+    await expect(changeUserRole(db, attackerOwner, "victim-user", Role.RECEPTIONIST)).rejects.toBeInstanceOf(
+      UserNotFoundError,
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("Tenant A'nın OWNER'ı, Tenant B'ye ait bir kullanıcıyı deaktive edemez — UserNotFoundError", async () => {
+    const { db, findUnique, update } = createMockDb();
+    findUnique.mockResolvedValue({ id: "victim-user", tenantId: tenantB, role: Role.ENGINEER, deactivatedAt: null });
+    const attackerOwner = { id: "attacker-owner", tenantId: tenantA, role: Role.OWNER };
+
+    await expect(deactivateUser(db, attackerOwner, "victim-user")).rejects.toBeInstanceOf(UserNotFoundError);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("deaktive edilen kullanıcının MEVCUT refresh token'ı anında reddedilir; MEVCUT access token'ı (≤15dk kalan TTL) stateless JWT olduğu için yeniden kontrol edilmez — bu kabul edilen bir davranış, boşluk değil", async () => {
+    const { db, findUnique, refreshTokenUpdateMany } = createMockDb();
+    findUnique.mockResolvedValue({ id: "victim-user", tenantId: tenantA, role: Role.ENGINEER, deactivatedAt: null });
+    const owner = { id: "owner-1", tenantId: tenantA, role: Role.OWNER };
+
+    // Deaktivasyondan HEMEN ÖNCE imzalanmış bir access token — sistemin
+    // zaten kabul ettiği "çalıntı access token" penceresiyle aynı risk.
+    const preDeactivationAccessToken = signAccessToken(
+      { userId: "victim-user", tenantId: tenantA, role: Role.ENGINEER },
+      "shared-secret",
+    );
+
+    await deactivateUser(db, owner, "victim-user");
+
+    // 1) Refresh token'lar anında iptal edildi (bkz. ADR 0012).
+    expect(refreshTokenUpdateMany).toHaveBeenCalledWith({
+      where: { userId: "victim-user", revokedAt: null },
+      data: { revokedAt: expect.any(Date) as Date },
+    });
+
+    // 2) Buna KARŞIN, deaktivasyondan önce imzalanan access token hâlâ
+    // kriptografik olarak geçerli görünüyor (JWT durum tutmuyor) — bu satır
+    // bilinen/kabul edilen davranışı belgeliyor, bir regresyon testi değil.
+    expect(verifyAccessToken(preDeactivationAccessToken, "shared-secret")).toEqual({
+      userId: "victim-user",
+      tenantId: tenantA,
+      role: Role.ENGINEER,
+    });
+
+    // 3) Ama refresh ile yenilenmeye çalışıldığında artık reddedilir —
+    // saldırı penceresi en fazla mevcut access token'ın kalan TTL'i (≤15dk) ile sınırlı.
+    const refreshDb: AuthRefreshDb = {
+      refreshToken: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "rt-1",
+          userId: "victim-user",
+          expiresAt: new Date(Date.now() + 60_000),
+          revokedAt: new Date(), // deactivateUser'ın az önce yaptığı iptal
+        }),
+        update: vi.fn(),
+        create: vi.fn(),
+        updateMany: vi.fn(),
+      },
+      user: { findUnique: vi.fn() },
+    };
+    await expect(refreshTokens(refreshDb, "shared-secret", "victims-refresh-token")).rejects.toBeInstanceOf(
+      InvalidRefreshTokenError,
+    );
   });
 });

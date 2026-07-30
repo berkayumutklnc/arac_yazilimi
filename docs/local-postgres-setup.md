@@ -13,6 +13,21 @@ UAC istemini onaylayarak çalıştırmalısınız. Aşağıdaki adımlar bittiğ
 migration çalıştırılmadığı için adım 4'teki tek `prisma migrate dev --name init` artık
 güncel `schema.prisma`'nın TAMAMINI (unique index + AccessDeniedAuditLog dahil) kapsayacak.
 
+**Not (ADR 0010-0013 sonrası — SUPER_ADMIN, davet, kullanıcı yönetimi, bayi bağlama):**
+Şema yine genişledi (`Role.SUPER_ADMIN`, `Invitation`, `User.deactivatedAt`,
+`UserManagementAuditLog`, `DealerAccountStatus` + `DealerAccount.{status,requestedBy,
+approvedBy,respondedAt}`). Aynı gerekçeyle (henüz hiç migration yok) bunlar da adım 4'teki
+`prisma migrate dev --name init`'e otomatik dahil olacak — ayrı bir migration adımı
+GEREKMİYOR. Bu turda YENİ olan tek ek adım: **adım 5.5** (`bootstrap:platform-admin`,
+aşağıda) — ilk `prisma migrate dev` çalıştırıldıktan SONRA, ilk SUPER_ADMIN'i oluşturmak için.
+
+**Not (ADR 0014 sonrası — faturalama epiği):** Şema yine genişledi (`WorkOrderItem`
+kalem alanları, `InvoiceStatus` yeniden tanımlandı, `Invoice.{invoiceNumber,issuedAt,
+voidedAt}`, `InvoiceLine` kalem alanları, yeni `InvoiceCounter` + `InvoiceStatusAuditLog`
+modelleri — bkz. `docs/adr/0014-invoice-billing-epic.md`). Aynı gerekçeyle (henüz hiç
+migration yok) bunlar da adım 4'teki `prisma migrate dev --name init`'e otomatik dahil
+olacak — ayrı bir migration adımı GEREKMİYOR.
+
 **Not (CI bağımlılığı):** `.github/workflows/main.yml`'deki `integration-tests` ve
 `e2e-tests` job'ları `prisma migrate deploy` çalıştırır — bu komut yalnızca commit'lenmiş
 `apps/api/prisma/migrations/` dizinindeki dosyaları uygular, **yeni migration üretmez**.
@@ -94,6 +109,20 @@ Sonra migration'ı uygulayın:
 ```powershell
 npx prisma migrate dev
 ```
+
+## 5.5 İlk SUPER_ADMIN'i oluşturun (ADR 0010)
+
+Kayıt/davet HTTP endpoint'leri kasıtlı olarak "kendi kendini yetkilendiremiyor"
+— ilk platform-admin'i deploy-time bir script oluşturur (idempotent, güvenle
+tekrar çalıştırılabilir):
+
+```powershell
+# apps/api/.env'deki PLATFORM_ADMIN_EMAIL/PLATFORM_ADMIN_INITIAL_PASSWORD kullanılır
+npm run bootstrap:platform-admin
+```
+
+Ardından `tenantSlug="__platform__"` ile `/auth/login`'e giriş yapabilirsiniz
+(apps/web'de normal giriş formu, atölye alanına `__platform__` yazılır).
 
 ## 6. Doğrulama
 

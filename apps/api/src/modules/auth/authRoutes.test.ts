@@ -23,6 +23,7 @@ async function makeApp() {
     tenantId: "tenant-1",
     passwordHash: await hashPassword(password),
     role: Role.OWNER,
+    deactivatedAt: null,
   });
 
   const refreshTokenCreate = vi.fn<AuthLoginDb["refreshToken"]["create"]>();

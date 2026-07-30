@@ -56,7 +56,15 @@ async function seedHubDealerScenario(costKurus: number, creditBalanceKurus: numb
   });
 
   const dealerAccount = await prisma.dealerAccount.create({
-    data: { hubTenantId: hubTenant.id, dealerTenantId: dealerTenant.id, creditBalanceKurus },
+    data: {
+      hubTenantId: hubTenant.id,
+      dealerTenantId: dealerTenant.id,
+      status: "ACTIVE",
+      requestedBy: "seed",
+      approvedBy: "seed",
+      respondedAt: new Date(),
+      creditBalanceKurus,
+    },
   });
 
   const hubEngineer = { id: randomUUID(), tenantId: hubTenant.id, role: Role.ENGINEER };

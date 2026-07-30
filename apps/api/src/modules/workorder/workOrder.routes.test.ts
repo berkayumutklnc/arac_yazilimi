@@ -6,6 +6,8 @@ import { Role } from "../../generated/prisma/enums.js";
 import type { PrismaClient } from "../../generated/prisma/client.js";
 import type { WorkOrderStatus } from "./workOrderStatus.machine.js";
 import type { DiagnosticReportDiagClient } from "./workOrderDiagnostics.service.js";
+import type { WorkOrderItemRecord } from "./workOrderItem.service.js";
+import type { InvoiceGenerationDb } from "../billing/invoiceGeneration.service.js";
 import {
   DiagServiceUnavailableError,
   DiagServiceContractError,
@@ -44,11 +46,19 @@ function createMockScopedDb() {
   const diagnosticReportCreate = vi.fn<AppScopedDb["workOrderDiagnosticReport"]["create"]>();
   const diagnosticReportFindMany = vi.fn<AppScopedDb["workOrderDiagnosticReport"]["findMany"]>();
   diagnosticReportFindMany.mockResolvedValue([]);
+  const itemCreate = vi.fn<AppScopedDb["workOrderItem"]["create"]>();
+  const itemFindMany = vi.fn<AppScopedDb["workOrderItem"]["findMany"]>();
+  itemFindMany.mockResolvedValue([]);
+  const itemFindUnique = vi.fn<AppScopedDb["workOrderItem"]["findUnique"]>();
+  const itemDelete = vi.fn<AppScopedDb["workOrderItem"]["delete"]>();
+  const invoiceCreate = vi.fn<InvoiceGenerationDb["invoice"]["create"]>();
   const scopedDb = {
     vehicle: { findUnique: vehicleFindUnique },
     workOrder: { findUnique, update, create, findMany },
     workOrderStatusAuditLog: { create: auditCreate, findMany: auditFindMany },
     workOrderDiagnosticReport: { create: diagnosticReportCreate, findMany: diagnosticReportFindMany },
+    workOrderItem: { create: itemCreate, findMany: itemFindMany, findUnique: itemFindUnique, delete: itemDelete },
+    invoice: { create: invoiceCreate },
   } as unknown as AppScopedDb;
   return {
     scopedDb,
@@ -61,6 +71,11 @@ function createMockScopedDb() {
     auditFindMany,
     diagnosticReportCreate,
     diagnosticReportFindMany,
+    itemCreate,
+    itemFindMany,
+    itemFindUnique,
+    itemDelete,
+    invoiceCreate,
   };
 }
 
@@ -69,8 +84,15 @@ function createMockScopedDb() {
 // test edildi) tekrar kurmak yerine, $extends'i doğrudan mock scoped db'yi
 // döndürecek şekilde sahteliyoruz — bu test yalnızca route KABLOLAMASINI
 // (auth zorunluluğu, durum kodu eşlemesi) doğruluyor.
+// DELIVERED geçişi prisma.$transaction'ı DOĞRUDAN kullanır (bkz.
+// invoiceTransactional.ts) — tx olarak AYNI scopedDb model mock'larını taşıyan
+// bir nesne alır, gerçek Postgres transaction semantiği burada test edilmez
+// (yalnızca route KABLOLAMASI, bkz. invoiceTransactional.test.ts).
 function createFakePrisma(scopedDb: AppScopedDb): PrismaClient {
-  return { $extends: () => scopedDb } as unknown as PrismaClient;
+  return {
+    $extends: () => scopedDb,
+    $transaction: (fn: (tx: unknown) => unknown) => fn(scopedDb),
+  } as unknown as PrismaClient;
 }
 
 // Bu route'ların çoğu storage/diagServiceClient kullanmıyor — buildApp'in
@@ -88,12 +110,20 @@ function createMockDiagServiceClient() {
   return { diagServiceClient: { parseDtcFile, analyzeWotFile }, parseDtcFile, analyzeWotFile };
 }
 
+const unusedEmailSender = { sendInvitationEmail: vi.fn() };
+
 function buildTestApp(
   scopedDb: AppScopedDb,
   diagServiceClient: DiagnosticReportDiagClient = createMockDiagServiceClient().diagServiceClient,
 ) {
   const prisma = createFakePrisma(scopedDb);
-  return buildApp(prisma, { jwtSecret, storage: unusedStorage, diagServiceClient });
+  return buildApp(prisma, {
+    jwtSecret,
+    storage: unusedStorage,
+    diagServiceClient,
+    emailSender: unusedEmailSender,
+    webAppBaseUrl: "https://app.example.test",
+  });
 }
 
 function authHeader(overrides: { tenantId?: string; role?: Role } = {}) {
@@ -271,6 +301,142 @@ describe("PATCH /work-orders/:id/status", () => {
     });
 
     expect(response.statusCode).toBe(200);
+  });
+});
+
+describe("PATCH /work-orders/:id/status (DELIVERED -> otomatik taslak fatura)", () => {
+  it("QUALITY_CHECK -> DELIVERED'da 200 döner, mevcut kalemlerden taslak fatura oluşturulur", async () => {
+    const { scopedDb, findUnique, itemFindMany, invoiceCreate, auditCreate } = createMockScopedDb();
+    findUnique.mockResolvedValue(workOrderRow("QUALITY_CHECK"));
+    itemFindMany.mockResolvedValue([
+      {
+        id: "item-1",
+        workOrderId,
+        itemType: "SERVICE",
+        description: "Stage 1 optimizasyon",
+        serviceTypeId: null,
+        quantity: 1,
+        unitPriceKurus: 5_000_00,
+        vatRate: "RATE_20",
+        netAmountKurus: 5_000_00,
+        vatAmountKurus: 1_000_00,
+        lineTotalKurus: 6_000_00,
+        createdAt: new Date("2026-01-01"),
+      },
+    ]);
+    invoiceCreate.mockResolvedValue({
+      id: "inv-1",
+      workOrderId,
+      status: "DRAFT",
+      invoiceNumber: null,
+      issuedAt: null,
+      voidedAt: null,
+      totalKurus: 6_000_00,
+      createdAt: new Date("2026-01-01"),
+    });
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/work-orders/${workOrderId}/status`,
+      headers: authHeader(),
+      payload: { toStatus: "DELIVERED" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(invoiceCreate).toHaveBeenCalledWith({
+      data: {
+        workOrderId,
+        status: "DRAFT",
+        invoiceNumber: null,
+        totalKurus: 6_000_00,
+        lines: {
+          create: [
+            {
+              description: "Stage 1 optimizasyon",
+              quantity: 1,
+              unitPriceKurus: 5_000_00,
+              vatRate: "RATE_20",
+              netAmountKurus: 5_000_00,
+              vatAmountKurus: 1_000_00,
+              lineTotalKurus: 6_000_00,
+            },
+          ],
+        },
+        tenantId,
+      },
+    });
+    expect(auditCreate).toHaveBeenCalledWith({
+      data: {
+        workOrderId,
+        fromStatus: "QUALITY_CHECK",
+        toStatus: "DELIVERED",
+        reason: null,
+        changedBy: "user-1",
+        tenantId,
+      },
+    });
+  });
+
+  it("kalemsiz iş emrinde ₺0 taslak fatura oluşturur, teslimatı engellemez", async () => {
+    const { scopedDb, findUnique, itemFindMany, invoiceCreate } = createMockScopedDb();
+    findUnique.mockResolvedValue(workOrderRow("QUALITY_CHECK"));
+    itemFindMany.mockResolvedValue([]);
+    invoiceCreate.mockResolvedValue({
+      id: "inv-1",
+      workOrderId,
+      status: "DRAFT",
+      invoiceNumber: null,
+      issuedAt: null,
+      voidedAt: null,
+      totalKurus: 0,
+      createdAt: new Date("2026-01-01"),
+    });
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/work-orders/${workOrderId}/status`,
+      headers: authHeader(),
+      payload: { toStatus: "DELIVERED" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(invoiceCreate).toHaveBeenCalledWith({
+      data: { workOrderId, status: "DRAFT", invoiceNumber: null, totalKurus: 0, lines: { create: [] }, tenantId },
+    });
+  });
+
+  it("geçersiz geçişte (ör. DRAFT'tan doğrudan DELIVERED) 409 döner, fatura oluşmaz", async () => {
+    const { scopedDb, findUnique, invoiceCreate } = createMockScopedDb();
+    findUnique.mockResolvedValue(workOrderRow("DRAFT"));
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/work-orders/${workOrderId}/status`,
+      headers: authHeader(),
+      payload: { toStatus: "DELIVERED" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(invoiceCreate).not.toHaveBeenCalled();
+  });
+
+  it("iş emri bulunamazsa 404 döner", async () => {
+    const { scopedDb, findUnique, invoiceCreate } = createMockScopedDb();
+    findUnique.mockResolvedValue(null);
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/work-orders/${workOrderId}/status`,
+      headers: authHeader(),
+      payload: { toStatus: "DELIVERED" },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(invoiceCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -651,5 +817,235 @@ describe("GET /work-orders/:id/diagnostic-reports", () => {
       where: { workOrderId },
       orderBy: { createdAt: "desc" },
     });
+  });
+});
+
+const addItemPayload = {
+  itemType: "SERVICE",
+  description: "Yağ değişimi",
+  quantity: 2,
+  unitPriceKurus: 100_00,
+  vatRate: "RATE_20",
+};
+
+function itemRow(overrides: Partial<WorkOrderItemRecord> = {}): WorkOrderItemRecord {
+  return {
+    id: "item-1",
+    workOrderId,
+    itemType: "SERVICE",
+    description: "Yağ değişimi",
+    serviceTypeId: null,
+    quantity: 2,
+    unitPriceKurus: 100_00,
+    vatRate: "RATE_20",
+    netAmountKurus: 200_00,
+    vatAmountKurus: 40_00,
+    lineTotalKurus: 240_00,
+    createdAt: new Date("2026-01-01"),
+    ...overrides,
+  };
+}
+
+describe("POST /work-orders/:id/items", () => {
+  it("Authorization başlığı yoksa 401 döner", async () => {
+    const { scopedDb } = createMockScopedDb();
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/work-orders/${workOrderId}/items`,
+      payload: addItemPayload,
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("DEALER rolü kalem ekleyemez — 403 döner", async () => {
+    const { scopedDb } = createMockScopedDb();
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/work-orders/${workOrderId}/items`,
+      headers: authHeader({ role: Role.DEALER }),
+      payload: addItemPayload,
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("geçersiz gövde (bilinmeyen vatRate) 400 döner", async () => {
+    const { scopedDb } = createMockScopedDb();
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/work-orders/${workOrderId}/items`,
+      headers: authHeader(),
+      payload: { ...addItemPayload, vatRate: "RATE_5" },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("iş emri bulunamazsa 404 döner", async () => {
+    const { scopedDb, findUnique } = createMockScopedDb();
+    findUnique.mockResolvedValue(null);
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/work-orders/${workOrderId}/items`,
+      headers: authHeader(),
+      payload: addItemPayload,
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("iş emri DELIVERED ise 409 döner", async () => {
+    const { scopedDb, findUnique } = createMockScopedDb();
+    findUnique.mockResolvedValue(workOrderRow("DELIVERED"));
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/work-orders/${workOrderId}/items`,
+      headers: authHeader(),
+      payload: addItemPayload,
+    });
+
+    expect(response.statusCode).toBe(409);
+  });
+
+  it("geçerli girdide 201 döner, tutarlar hesaplanmış olarak kaydedilir", async () => {
+    const { scopedDb, findUnique, itemCreate } = createMockScopedDb();
+    findUnique.mockResolvedValue(workOrderRow("DRAFT"));
+    itemCreate.mockResolvedValue(itemRow());
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/work-orders/${workOrderId}/items`,
+      headers: authHeader(),
+      payload: addItemPayload,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(itemCreate).toHaveBeenCalledWith({
+      data: {
+        workOrderId,
+        itemType: "SERVICE",
+        description: "Yağ değişimi",
+        serviceTypeId: null,
+        quantity: 2,
+        unitPriceKurus: 100_00,
+        vatRate: "RATE_20",
+        netAmountKurus: 200_00,
+        vatAmountKurus: 40_00,
+        lineTotalKurus: 240_00,
+      },
+    });
+  });
+});
+
+describe("GET /work-orders/:id/items", () => {
+  it("Authorization başlığı yoksa 401 döner", async () => {
+    const { scopedDb } = createMockScopedDb();
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({ method: "GET", url: `/work-orders/${workOrderId}/items` });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("kalemleri 200 ile döner", async () => {
+    const { scopedDb, itemFindMany } = createMockScopedDb();
+    itemFindMany.mockResolvedValue([itemRow()]);
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/work-orders/${workOrderId}/items`,
+      headers: authHeader(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body: { items: unknown[] } = response.json();
+    expect(body.items).toHaveLength(1);
+    expect(itemFindMany).toHaveBeenCalledWith({
+      where: { workOrderId },
+      orderBy: { createdAt: "asc" },
+    });
+  });
+});
+
+describe("DELETE /work-orders/:id/items/:itemId", () => {
+  it("Authorization başlığı yoksa 401 döner", async () => {
+    const { scopedDb } = createMockScopedDb();
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({ method: "DELETE", url: `/work-orders/${workOrderId}/items/item-1` });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("iş emri bulunamazsa 404 döner", async () => {
+    const { scopedDb, findUnique } = createMockScopedDb();
+    findUnique.mockResolvedValue(null);
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/work-orders/${workOrderId}/items/item-1`,
+      headers: authHeader(),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("iş emri DELIVERED ise 409 döner", async () => {
+    const { scopedDb, findUnique } = createMockScopedDb();
+    findUnique.mockResolvedValue(workOrderRow("DELIVERED"));
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/work-orders/${workOrderId}/items/item-1`,
+      headers: authHeader(),
+    });
+
+    expect(response.statusCode).toBe(409);
+  });
+
+  it("kalem bulunamazsa 404 döner", async () => {
+    const { scopedDb, findUnique, itemFindUnique } = createMockScopedDb();
+    findUnique.mockResolvedValue(workOrderRow("DRAFT"));
+    itemFindUnique.mockResolvedValue(null);
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/work-orders/${workOrderId}/items/item-1`,
+      headers: authHeader(),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("geçerli kalemde 204 döner", async () => {
+    const { scopedDb, findUnique, itemFindUnique, itemDelete } = createMockScopedDb();
+    findUnique.mockResolvedValue(workOrderRow("DRAFT"));
+    itemFindUnique.mockResolvedValue(itemRow());
+    const app = buildTestApp(scopedDb);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/work-orders/${workOrderId}/items/item-1`,
+      headers: authHeader(),
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(itemDelete).toHaveBeenCalledWith({ where: { id: "item-1" } });
   });
 });

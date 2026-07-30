@@ -18,6 +18,14 @@ import {
   type DiagnosticReportDiagClient,
 } from "./workOrderDiagnostics.service.js";
 import {
+  addWorkOrderItem,
+  removeWorkOrderItem,
+  listWorkOrderItems,
+  WorkOrderItemsLockedError,
+  WorkOrderItemNotFoundError,
+} from "./workOrderItem.service.js";
+import { deliverWorkOrderTransactional } from "../billing/invoiceTransactional.js";
+import {
   DiagServiceUnavailableError,
   DiagServiceRequestError,
   DiagServiceContractError,
@@ -37,6 +45,18 @@ const WORKSHOP_ROLES: readonly Role[] = [Role.OWNER, Role.ENGINEER, Role.RECEPTI
 const paramsSchema = z.object({ id: z.string().min(1) });
 const createBodySchema = z.object({ vehicleId: z.string().min(1) });
 const diagnosticReportTypeSchema = z.enum(["DTC", "WOT"]);
+
+const itemParamsSchema = z.object({ id: z.string().min(1), itemId: z.string().min(1) });
+// bkz. ADR 0014 — hizmet/parça ayrımı itemType + serbest metin description ile
+// yapılır, serviceTypeId bilinçli olarak opsiyonel (katalog CRUD'u kapsam dışı).
+const addItemBodySchema = z.object({
+  itemType: z.enum(["SERVICE", "PART"]),
+  description: z.string().min(1),
+  serviceTypeId: z.string().min(1).optional(),
+  quantity: z.number().int().positive(),
+  unitPriceKurus: z.number().int().positive(),
+  vatRate: z.enum(["RATE_0", "RATE_1", "RATE_10", "RATE_20"]),
+});
 
 // tenantId ve changedBy artık gövdede DEĞİL (bkz. docs/security-audit.md
 // KRİTİK-0, ADR 0006) — ikisi de yalnızca doğrulanmış JWT'den
@@ -64,12 +84,25 @@ export function registerWorkOrderRoutes(
       const body = bodySchema.parse(request.body);
 
       try {
-        await transitionWorkOrderStatus(request.tenantDb, {
-          workOrderId: params.id,
-          toStatus: body.toStatus,
-          changedBy: request.authContext.userId,
-          reason: body.reason,
-        });
+        // Yalnızca DELIVERED geçişi atomik/transactional yoldan gider (taslak
+        // fatura otomatik oluşturulur, bkz. ADR 0014, invoiceTransactional.ts)
+        // — diğer TÜM geçişler mevcut, transactional-olmayan yolu DEĞİŞTİRMEDEN
+        // kullanmaya devam eder (blast-radius kararı, mevcut testleri korur).
+        if (body.toStatus === "DELIVERED") {
+          await deliverWorkOrderTransactional(prisma, request.authContext.tenantId, {
+            workOrderId: params.id,
+            toStatus: body.toStatus,
+            changedBy: request.authContext.userId,
+            reason: body.reason,
+          });
+        } else {
+          await transitionWorkOrderStatus(request.tenantDb, {
+            workOrderId: params.id,
+            toStatus: body.toStatus,
+            changedBy: request.authContext.userId,
+            reason: body.reason,
+          });
+        }
       } catch (err) {
         if (err instanceof InvalidWorkOrderTransitionError) {
           return reply.code(409).send({ error: err.message, from: err.from, to: err.to });
@@ -203,6 +236,72 @@ export function registerWorkOrderRoutes(
       const params = paramsSchema.parse(request.params);
       const items = await listDiagnosticReports(request.tenantDb, params.id);
       return reply.code(200).send({ items });
+    },
+  );
+
+  app.post("/work-orders/:id/items", { preHandler: authPreHandler }, async (request, reply) => {
+    if (!requireRole(request, reply, WORKSHOP_ROLES)) {
+      return;
+    }
+
+    const params = paramsSchema.parse(request.params);
+    const body = addItemBodySchema.parse(request.body);
+
+    try {
+      const item = await addWorkOrderItem(request.tenantDb, {
+        workOrderId: params.id,
+        itemType: body.itemType,
+        description: body.description,
+        serviceTypeId: body.serviceTypeId,
+        quantity: body.quantity,
+        unitPriceKurus: body.unitPriceKurus,
+        vatRate: body.vatRate,
+      });
+      return await reply.code(201).send(item);
+    } catch (err) {
+      if (err instanceof WorkOrderNotFoundError) {
+        return reply.code(404).send({ error: err.message });
+      }
+      if (err instanceof WorkOrderItemsLockedError) {
+        return reply.code(409).send({ error: err.message });
+      }
+      throw err;
+    }
+  });
+
+  app.get("/work-orders/:id/items", { preHandler: authPreHandler }, async (request, reply) => {
+    if (!requireRole(request, reply, WORKSHOP_ROLES)) {
+      return;
+    }
+
+    const params = paramsSchema.parse(request.params);
+    const items = await listWorkOrderItems(request.tenantDb, params.id);
+    return reply.code(200).send({ items });
+  });
+
+  app.delete(
+    "/work-orders/:id/items/:itemId",
+    { preHandler: authPreHandler },
+    async (request, reply) => {
+      if (!requireRole(request, reply, WORKSHOP_ROLES)) {
+        return;
+      }
+
+      const params = itemParamsSchema.parse(request.params);
+
+      try {
+        await removeWorkOrderItem(request.tenantDb, params.id, params.itemId);
+      } catch (err) {
+        if (err instanceof WorkOrderNotFoundError || err instanceof WorkOrderItemNotFoundError) {
+          return reply.code(404).send({ error: err.message });
+        }
+        if (err instanceof WorkOrderItemsLockedError) {
+          return reply.code(409).send({ error: err.message });
+        }
+        throw err;
+      }
+
+      return reply.code(204).send();
     },
   );
 }

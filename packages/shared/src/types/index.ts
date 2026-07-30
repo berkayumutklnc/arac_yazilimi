@@ -4,8 +4,17 @@ import type { components as DiagServiceComponents } from "../generated/diagServi
 // packages/shared, apps/api'nin üretilmiş Prisma client'ına bağımlı değil
 // (bilinçli mimari sınır, bkz. plan). Bu diziler değişirse apps/api/prisma/
 // schema.prisma ile senkron tutulmalı.
-export const ROLES = ["OWNER", "ENGINEER", "RECEPTIONIST", "DEALER"] as const;
+// SUPER_ADMIN: kiracılar-üstü platform yöneticisi (bkz. ADR 0010) — tenant-içi
+// davetlerde asla seçilemez (apps/api zod şeması SUPER_ADMIN'i zaten dışlıyor).
+export const ROLES = ["OWNER", "ENGINEER", "RECEPTIONIST", "DEALER", "SUPER_ADMIN"] as const;
 export type Role = (typeof ROLES)[number];
+
+// Tenant-içi davetlerde seçilebilecek roller — SUPER_ADMIN hariç (bkz. ADR 0010/0012).
+export const INVITABLE_ROLES = ["OWNER", "ENGINEER", "RECEPTIONIST", "DEALER"] as const;
+export type InvitableRole = (typeof INVITABLE_ROLES)[number];
+
+export const DEALER_ACCOUNT_STATUSES = ["PENDING", "ACTIVE", "REJECTED"] as const;
+export type DealerAccountStatus = (typeof DEALER_ACCOUNT_STATUSES)[number];
 
 export const WORK_ORDER_STATUSES = [
   "DRAFT",
@@ -156,6 +165,148 @@ export interface WorkOrderDiagnosticReportSummary {
 
 export interface DiagnosticReportListResponse {
   items: WorkOrderDiagnosticReportSummary[];
+}
+
+// --- Platform admin (bkz. ADR 0010/0011) ---
+export interface TenantSummary {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+}
+
+export interface TenantListResponse {
+  items: TenantSummary[];
+}
+
+export interface CreateTenantResponse {
+  tenant: TenantSummary;
+}
+
+// --- Kiracı-içi kullanıcı yönetimi (bkz. ADR 0011/0012) ---
+export interface TenantUserSummary {
+  id: string;
+  email: string;
+  role: Role;
+  deactivatedAt: string | null;
+  createdAt: string;
+}
+
+export interface TenantUserListResponse {
+  items: TenantUserSummary[];
+}
+
+export interface InvitationSummary {
+  id: string;
+  email: string;
+  role: Role;
+  expiresAt: string;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface InvitationListResponse {
+  items: InvitationSummary[];
+}
+
+export interface CreateInvitationResponse {
+  invitation: Pick<InvitationSummary, "id" | "email" | "role" | "expiresAt">;
+}
+
+export interface InvitationPreviewResponse {
+  tenantId: string;
+  email: string;
+  role: Role;
+}
+
+// --- Bayi bağlama + kredi (bkz. ADR 0013) ---
+export interface DealerLinkSummary {
+  id: string;
+  hubTenantId: string;
+  dealerTenantId: string;
+  status: DealerAccountStatus;
+  requestedBy: string;
+  approvedBy: string | null;
+  respondedAt: string | null;
+  creditBalanceKurus: number;
+  createdAt: string;
+}
+
+export interface DealerLinkListResponse {
+  items: DealerLinkSummary[];
+}
+
+export interface CreditTopUpResponse {
+  balanceAfterKurus: number;
+}
+
+// --- Faturalama (bkz. ADR 0014) ---
+export const WORK_ORDER_ITEM_TYPES = ["SERVICE", "PART"] as const;
+export type WorkOrderItemType = (typeof WORK_ORDER_ITEM_TYPES)[number];
+
+// Türkiye KDV dilimleri.
+export const VAT_RATES = ["RATE_0", "RATE_1", "RATE_10", "RATE_20"] as const;
+export type VatRate = (typeof VAT_RATES)[number];
+
+// Frontend'de satır toplamı önizlemesi için — asıl hesap her zaman backend'de
+// yapılır (bkz. apps/api/src/modules/billing/invoiceMath.ts).
+export const VAT_RATE_PERCENTAGES: Record<VatRate, number> = {
+  RATE_0: 0,
+  RATE_1: 1,
+  RATE_10: 10,
+  RATE_20: 20,
+};
+
+export const INVOICE_STATUSES = ["DRAFT", "ISSUED", "PAID", "VOID"] as const;
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+
+export interface WorkOrderItemSummary {
+  id: string;
+  workOrderId: string;
+  itemType: WorkOrderItemType;
+  description: string;
+  serviceTypeId: string | null;
+  quantity: number;
+  unitPriceKurus: number;
+  vatRate: VatRate;
+  netAmountKurus: number;
+  vatAmountKurus: number;
+  lineTotalKurus: number;
+  createdAt: string;
+}
+
+export interface WorkOrderItemListResponse {
+  items: WorkOrderItemSummary[];
+}
+
+export interface InvoiceLineSummary {
+  id: string;
+  description: string;
+  quantity: number;
+  unitPriceKurus: number;
+  vatRate: VatRate;
+  netAmountKurus: number;
+  vatAmountKurus: number;
+  lineTotalKurus: number;
+}
+
+export interface InvoiceSummary {
+  id: string;
+  workOrderId: string;
+  status: InvoiceStatus;
+  invoiceNumber: string | null;
+  issuedAt: string | null;
+  voidedAt: string | null;
+  totalKurus: number;
+  createdAt: string;
+}
+
+// GET /work-orders/:id/invoice satır tablosunu da döner — issue/pay/void
+// aksiyonlarının yanıtı satırları taşımaz (kalemler DELIVERED anında donduğu
+// için değişmezler, frontend aksiyon sonrası GET'i tekrar çağırır).
+export interface InvoiceDetail extends InvoiceSummary {
+  lines: InvoiceLineSummary[];
 }
 
 // --- Generic ---

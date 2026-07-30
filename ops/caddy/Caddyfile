@@ -1,0 +1,29 @@
+# Otomatik TLS (Let's Encrypt) — bkz. docs/adr/0015-production-deployment-architecture.md.
+# {$APP_DOMAIN}/{$API_DOMAIN} docker-compose.prod.yml'in `caddy` servisine
+# geçtiği ortam değişkenleridir (bkz. .env.production.example). Caddy, gerçek
+# bir domain kullanıldığında (localhost/IP değil) sertifikayı otomatik alır/
+# yeniler — ek yapılandırma gerekmez.
+
+{$APP_DOMAIN} {
+	reverse_proxy web:3000
+
+	# Yapılandırılmış (JSON) access log stdout'a — Docker json-file driver
+	# bunu zaten sarar (bkz. docker-compose.prod.yml x-logging).
+	log {
+		output stdout
+		format json
+	}
+
+	encode gzip
+}
+
+{$API_DOMAIN} {
+	reverse_proxy api:3001
+
+	log {
+		output stdout
+		format json
+	}
+
+	encode gzip
+}

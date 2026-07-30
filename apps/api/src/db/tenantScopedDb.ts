@@ -8,6 +8,10 @@ import type { EcuFileUploadDb } from "../modules/ecufile/ecuFileUpload.service.j
 import type { EcuFileListDb } from "../modules/ecufile/ecuFileList.service.js";
 import type { AccessDeniedAuditLogDb } from "../security/accessDeniedAudit.js";
 import type { WorkOrderDiagnosticsDb } from "../modules/workorder/workOrderDiagnostics.service.js";
+import type { InvitationDb } from "../modules/invitation/invitation.service.js";
+import type { UserListDb } from "../modules/user/userManagement.service.js";
+import type { WorkOrderItemDb } from "../modules/workorder/workOrderItem.service.js";
+import type { InvoiceDb } from "../modules/billing/invoice.service.js";
 
 // Tenant-scoped görünümün tam tipi — request.tenantDb bu tipi taşır ve her
 // servisin beklediği dar XxxDb arayüzleriyle doğrudan yapısal olarak uyumludur.
@@ -21,7 +25,11 @@ export type AppScopedDb = WorkOrderTransitionDb &
   EcuFileUploadDb &
   EcuFileListDb &
   AccessDeniedAuditLogDb &
-  WorkOrderDiagnosticsDb;
+  WorkOrderDiagnosticsDb &
+  InvitationDb &
+  UserListDb &
+  WorkOrderItemDb &
+  InvoiceDb;
 
 // Tek bir `tenantId` kolonu taşıyan modeller — bkz. docs/adr/0006, "Model
 // Kapsamı Tablosu". DealerAccount/FileRequest/FileRequestStatusAuditLog/
@@ -37,8 +45,12 @@ const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   "WorkOrderStatusAuditLog",
   "EcuFileDownloadAuditLog",
   "Invoice",
+  "InvoiceStatusAuditLog",
+  "InvoiceCounter",
   "AccessDeniedAuditLog",
   "WorkOrderDiagnosticReport",
+  "Invitation",
+  "UserManagementAuditLog",
 ]);
 
 const READ_OR_WHERE_OPERATIONS: ReadonlySet<string> = new Set([

@@ -7,9 +7,7 @@
   "paths": {
     "/dtc/parse": {
       "post": {
-        "tags": [
-          "dtc"
-        ],
+        "tags": ["dtc"],
         "summary": "Parse Dtc File",
         "operationId": "parse_dtc_file_dtc_parse_post",
         "requestBody": {
@@ -48,9 +46,7 @@
     },
     "/wot/analyze": {
       "post": {
-        "tags": [
-          "wot"
-        ],
+        "tags": ["wot"],
         "summary": "Analyze Wot File",
         "operationId": "analyze_wot_file_wot_analyze_post",
         "requestBody": {
@@ -86,6 +82,28 @@
           }
         }
       }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -99,9 +117,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "file"
-        ],
+        "required": ["file"],
         "title": "Body_analyze_wot_file_wot_analyze_post"
       },
       "Body_parse_dtc_file_dtc_parse_post": {
@@ -113,9 +129,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "file"
-        ],
+        "required": ["file"],
         "title": "Body_parse_dtc_file_dtc_parse_post"
       },
       "DtcMatch": {
@@ -141,11 +155,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "code",
-          "description",
-          "known"
-        ],
+        "required": ["code", "description", "known"],
         "title": "DtcMatch"
       },
       "DtcParseResponse": {
@@ -166,10 +176,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "matches",
-          "unknown_codes"
-        ],
+        "required": ["matches", "unknown_codes"],
         "title": "DtcParseResponse"
       },
       "Finding": {
@@ -199,13 +206,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "rule_id",
-          "severity",
-          "message",
-          "row_index",
-          "details"
-        ],
+        "required": ["rule_id", "severity", "message", "row_index", "details"],
         "title": "Finding"
       },
       "HTTPValidationError": {
@@ -254,11 +255,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
+        "required": ["loc", "msg", "type"],
         "title": "ValidationError"
       },
       "WotAnalysisResponse": {
@@ -276,10 +273,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "row_count",
-          "findings"
-        ],
+        "required": ["row_count", "findings"],
         "title": "WotAnalysisResponse"
       }
     }

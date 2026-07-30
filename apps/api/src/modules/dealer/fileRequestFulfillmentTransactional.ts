@@ -6,6 +6,7 @@ import {
   type FulfillFileRequestParams,
 } from "./fileRequestFulfillment.service.js";
 import type { EcuFileDb } from "../ecufile/ecuFile.service.js";
+import { lockDealerAccountForUpdate } from "./dealerAccountLock.js";
 
 // bkz. docs/adr/0007-credit-deduction-locking-strategy.md — bu dosya
 // `fulfillFileRequest`'in (fileRequestFulfillment.service.ts) saf, fake ile
@@ -20,27 +21,6 @@ export class ConcurrentFulfillmentError extends Error {
     );
     this.name = "ConcurrentFulfillmentError";
   }
-}
-
-interface DealerAccountLockRow {
-  id: string;
-  creditBalanceKurus: number;
-}
-
-// Prisma'nın `FOR UPDATE` için birinci sınıf bir API'si yok; kilitli okuma
-// ham SQL ile yazılıyor — aynı `tx` üzerinden, template literal parametrize
-// edildiği için SQL injection riski yok. Bu satır kilidi, aynı DealerAccount
-// için eşzamanlı iki fulfill çağrısının ikincisini birincinin commit'ine
-// kadar bekletir; ikinci çağrı kilidi aldığında bakiyeyi GÜNCEL (birincinin
-// düşümünü yansıtan) haliyle görür.
-async function lockDealerAccountForUpdate(
-  tx: Prisma.TransactionClient,
-  dealerAccountId: string,
-): Promise<DealerAccountLockRow | null> {
-  const rows = await tx.$queryRaw<DealerAccountLockRow[]>`
-    SELECT "id", "creditBalanceKurus" FROM "DealerAccount" WHERE "id" = ${dealerAccountId} FOR UPDATE
-  `;
-  return rows[0] ?? null;
 }
 
 // fulfillFileRequest'in saf mantığı `fileRequest.update`'in başarılı

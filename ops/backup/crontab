@@ -1,0 +1,2 @@
+# Her gece 03:00'te pg_dump → MinIO (bkz. scripts/backup.sh, docs/runbook.md).
+0 3 * * * /scripts/backup.sh >> /var/log/backup.log 2>&1

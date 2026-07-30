@@ -5,6 +5,8 @@ build/
 coverage/
 .env
 .env.local
+# .env.production.example İSTİSNA — bu bir şablon, sır içermez, commit edilir.
+.env.production
 *.log
 .DS_Store
 apps/diag-service/.venv/

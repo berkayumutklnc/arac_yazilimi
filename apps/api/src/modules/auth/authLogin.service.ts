@@ -20,6 +20,7 @@ interface UserRecord {
   tenantId: string;
   passwordHash: string;
   role: Role;
+  deactivatedAt: Date | null;
 }
 
 export interface AuthLoginDb {
@@ -69,6 +70,12 @@ export async function login(
 
   const passwordOk = await verifyPassword(user.passwordHash, input.password);
   if (!passwordOk) {
+    throw new InvalidCredentialsError();
+  }
+
+  if (user.deactivatedAt !== null) {
+    // Deaktive edilmiş hesabın ayrı bir mesajla belirtilmemesi bilinçli —
+    // enumeration direnci (bkz. ADR 0012).
     throw new InvalidCredentialsError();
   }
 
