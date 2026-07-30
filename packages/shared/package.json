@@ -6,9 +6,15 @@
   "types": "src/index.ts",
   "scripts": {
     "test": "vitest run",
-    "lint": "eslint src"
+    "test:related": "vitest related --run",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "generate:diag-types": "openapi-typescript openapi/diag-service.json -o src/generated/diagServiceTypes.ts"
   },
   "dependencies": {
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0"
   }
 }

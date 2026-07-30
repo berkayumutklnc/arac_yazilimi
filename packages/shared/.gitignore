@@ -1,0 +1,3 @@
+# apps/api/.gitignore'daki Prisma client konvansiyonuyla aynı — üretilmiş
+# kod commit edilmez, `npm run generate:diag-types` ile yeniden üretilir.
+/src/generated
