@@ -1,0 +1,6 @@
+# ADR 0006 — Auth Modülü ve Tenant-Scoped Prisma Extension (KRİTİK-0 Kapatma)
+
+**Karar:** `docs/security-audit.md` KRİTİK-0'ı kapatmak için gerçek bir auth katmanı eklendi: e-posta+şifre (argon2) → 15dk JWT access token + rotasyonlu, DB'de hash'li (opak, random) httpOnly cookie refresh token. `Tenant.slug` eklendi, login `{tenantSlug, email, password}` alır (ADR 0001'deki `@@unique([tenantId, email])` kararı korunuyor).
+**Kısıt:** `tenantId` artık hiçbir route body/query'sinden okunmuyor; yalnızca doğrulanmış JWT'den `request.authContext.tenantId` olarak geliyor. `createTenantScopedDb(prisma, tenantId)` — bir Prisma Client Extension — tek `tenantId` kolonlu 8 model için tüm sorgulara otomatik filtre/değer enjekte ediyor; servislerin aldığı dar `XxxDb` arayüzlerinde `tenantId` alanı artık hiç yok (TypeScript seviyesinde elle geçilemez).
+**Bilinçli istisna:** `DealerAccount`/`FileRequest`/`FileRequestStatusAuditLog`/`DealerCreditTransaction` iki-tenant ilişkisi olduğu için extension kapsamı dışında — bu modellerde hand-written `actingUser.tenantId` karşılaştırmaları devam ediyor, sadece `actingUser` artık yalnızca authContext'ten geliyor.
+**Durum:** Gerçek DB yok — tüm yeni katman (auth servisleri, extension, preHandler) mock/DI ile TDD edildi; ilk gerçek `prisma migrate dev` çalıştırıldığında şema (slug unique constraint, RefreshToken) doğrulanmalı.

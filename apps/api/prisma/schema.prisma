@@ -1,5 +1,5 @@
 // Prisma schema — Faz 1 MVP
-// Karar notları: ../../docs/adr/0001-prisma-tenant-isolation.md, ../../docs/adr/0002-ecufile-stockromref-workorder-compliance.md, ../../docs/adr/0003-workorder-status-machine-audit-log.md, ../../docs/adr/0004-ecufile-upload-download-policy-audit.md, ../../docs/adr/0005-dealer-hub-file-request-credit.md
+// Karar notları: ../../docs/adr/0001-prisma-tenant-isolation.md, ../../docs/adr/0002-ecufile-stockromref-workorder-compliance.md, ../../docs/adr/0003-workorder-status-machine-audit-log.md, ../../docs/adr/0004-ecufile-upload-download-policy-audit.md, ../../docs/adr/0005-dealer-hub-file-request-credit.md, ../../docs/adr/0006-auth-tenant-scoping.md, ../../docs/adr/0007-credit-deduction-locking-strategy.md, ../../docs/adr/0008-access-denied-audit-log.md, ../../docs/adr/0009-workorder-diagnostic-report.md
 
 generator client {
   provider = "prisma-client"
@@ -18,9 +18,12 @@ enum Role {
   DEALER
 }
 
-// Sıkı doğrusal yaşam döngüsü (bkz. ADR 0003): DRAFT -> ACCEPTED -> IN_PROGRESS ->
-// AWAITING_PARTS -> QUALITY_CHECK -> DELIVERED -> CLOSED. Geçiş kuralları
-// apps/api/src/modules/workorder/workOrderStatus.machine.ts içinde uygulanır.
+// Ana zincir sıkı doğrusal (bkz. ADR 0003): DRAFT -> ACCEPTED -> IN_PROGRESS ->
+// AWAITING_PARTS -> QUALITY_CHECK -> DELIVERED -> CLOSED. İki bilinçli dal:
+// QUALITY_CHECK -> IN_PROGRESS (rework) ve {DRAFT,ACCEPTED,IN_PROGRESS,
+// AWAITING_PARTS} -> CANCELLED (DELIVERED/CLOSED'dan iptal yok). Geçiş
+// kuralları apps/api/src/modules/workorder/workOrderStatus.machine.ts içinde
+// uygulanır.
 enum WorkOrderStatus {
   DRAFT
   ACCEPTED
@@ -29,6 +32,7 @@ enum WorkOrderStatus {
   QUALITY_CHECK
   DELIVERED
   CLOSED
+  CANCELLED
 }
 
 enum EcuFileType {
@@ -56,19 +60,45 @@ enum FileRequestStatus {
   REJECTED
 }
 
+// Reddedilen erişim denemelerinin güvenlik izleme kaydı (bkz. ADR 0008,
+// docs/security-audit.md DÜŞÜK-3) — yalnızca ECU dosyası indirme/yükleme
+// route'larında kullanılır.
+enum AccessDeniedResource {
+  ECU_FILE_DOWNLOAD
+  ECU_FILE_UPLOAD
+}
+
+enum AccessDeniedReason {
+  FORBIDDEN_ROLE
+  NOT_FOUND
+}
+
+// diag-service'in iki ucuna karşılık gelir (bkz. ADR 0009,
+// packages/shared/openapi/diag-service.json): DTC = POST /dtc/parse,
+// WOT = POST /wot/analyze.
+enum DiagnosticReportType {
+  DTC
+  WOT
+}
+
 model Tenant {
   id        String   @id @default(uuid())
   name      String
+  // Login sırasında hangi tenant'a giriş yapıldığını belirlemek için
+  // (bkz. ADR 0006) — insan-okunur, benzersiz kimlik.
+  slug      String   @unique
   createdAt DateTime @default(now())
 
-  users                   User[]
-  customers               Customer[]
-  vehicles                Vehicle[]
-  workOrders              WorkOrder[]
-  ecuFiles                EcuFile[]
-  invoices                Invoice[]
-  workOrderStatusAuditLogs WorkOrderStatusAuditLog[]
-  ecuFileDownloadAuditLogs EcuFileDownloadAuditLog[]
+  users                      User[]
+  customers                  Customer[]
+  vehicles                   Vehicle[]
+  workOrders                 WorkOrder[]
+  ecuFiles                   EcuFile[]
+  invoices                   Invoice[]
+  workOrderStatusAuditLogs   WorkOrderStatusAuditLog[]
+  ecuFileDownloadAuditLogs   EcuFileDownloadAuditLog[]
+  accessDeniedAuditLogs      AccessDeniedAuditLog[]
+  workOrderDiagnosticReports WorkOrderDiagnosticReport[]
 
   dealerAccountsAsHub    DealerAccount[] @relation("HubAccounts")
   dealerAccountsAsDealer DealerAccount[] @relation("DealerAccounts")
@@ -85,8 +115,24 @@ model User {
   role         Role
   createdAt    DateTime @default(now())
 
+  refreshTokens RefreshToken[]
+
   @@unique([tenantId, email])
   @@index([tenantId])
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  // Ham token asla saklanmaz — yalnızca SHA-256 hash'i (bkz. ADR 0006).
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId])
 }
 
 model Customer {
@@ -143,10 +189,11 @@ model WorkOrder {
   createdAt                DateTime        @default(now())
   closedAt                 DateTime?
 
-  items           WorkOrderItem[]
-  complianceSteps WorkOrderComplianceStep[]
-  statusAuditLogs WorkOrderStatusAuditLog[]
-  invoice         Invoice?
+  items             WorkOrderItem[]
+  complianceSteps   WorkOrderComplianceStep[]
+  statusAuditLogs   WorkOrderStatusAuditLog[]
+  diagnosticReports WorkOrderDiagnosticReport[]
+  invoice           Invoice?
 
   @@index([tenantId])
 }
@@ -180,6 +227,9 @@ model WorkOrderStatusAuditLog {
   workOrder   WorkOrder       @relation(fields: [workOrderId], references: [id])
   fromStatus  WorkOrderStatus
   toStatus    WorkOrderStatus
+  // Rework (QUALITY_CHECK -> IN_PROGRESS) ve iptal (-> CANCELLED) dallarında
+  // zorunlu, normal zincir geçişlerinde null (bkz. ADR 0003 revizyonu).
+  reason      String?
   changedBy   String
   changedAt   DateTime        @default(now())
 
@@ -209,6 +259,11 @@ model EcuFile {
   asReadFileIn      FileRequest[]             @relation("FileRequestReadFile")
   asResultFileIn    FileRequest?              @relation("FileRequestResultFile")
 
+  // Aynı araç için aynı hash'e sahip iki kayıt oluşamaz — DB seviyesinde
+  // garanti (bkz. ADR 0007). confirmEcuFileUpload'daki uygulama-seviyesi
+  // findFirst+create check-then-act deseni tek başına yarış koşuluna karşı
+  // yetersizdi; bu index eşzamanlı iki yüklemeden birini reddeder.
+  @@unique([tenantId, vehicleId, checksum])
   @@index([tenantId])
   @@index([vehicleId])
 }
@@ -225,6 +280,43 @@ model EcuFileDownloadAuditLog {
 
   @@index([tenantId])
   @@index([ecuFileId])
+}
+
+// bkz. ADR 0008. resourceId BİLİNÇLİ OLARAK FK'siz ve nullable — var
+// olmayan/başka tenant'a ait id'leri de (mevcut EcuFileDownloadAuditLog'un
+// zorunlu FK'si nedeniyle yapamadığı bir şeyi) kaybetmeden loglayabilmek için.
+model AccessDeniedAuditLog {
+  id         String               @id @default(uuid())
+  tenantId   String
+  tenant     Tenant               @relation(fields: [tenantId], references: [id])
+  actorId    String
+  actorRole  Role
+  resource   AccessDeniedResource
+  resourceId String?
+  reason     AccessDeniedReason
+  occurredAt DateTime             @default(now())
+
+  @@index([tenantId])
+}
+
+// bkz. ADR 0009. `result`, diag-service'in (zod ile doğrulanmış) ham JSON
+// yanıtını taşır — DTC (`matches`/`unknown_codes`) ve WOT (`row_count`/
+// `findings`) şekilleri kökten farklı olduğu için ayrı normalize tablolar
+// yerine bilinçli olarak Json seçildi.
+model WorkOrderDiagnosticReport {
+  id          String               @id @default(uuid())
+  tenantId    String
+  tenant      Tenant               @relation(fields: [tenantId], references: [id])
+  workOrderId String
+  workOrder   WorkOrder            @relation(fields: [workOrderId], references: [id])
+  reportType  DiagnosticReportType
+  fileName    String
+  result      Json
+  uploadedBy  String
+  createdAt   DateTime             @default(now())
+
+  @@index([tenantId])
+  @@index([workOrderId])
 }
 
 model DealerAccount {
