@@ -1,0 +1,48 @@
+{
+  // npm-audit CI kapısı (bkz. .github/workflows/main.yml `npm-audit` job'ı,
+  // docs/security-audit.md). `npm audit --audit-level=high` yerine bu dosya
+  // kullanılıyor çünkü aşağıdaki 5 bulgu, üst akış paketlerin (eslint-config-next,
+  // openapi-typescript, next) mevcut minor/patch sürümlerinde DÜZELTİLEMİYOR —
+  // düzeltme yalnızca major sürüm atlamasıyla geliyor (bkz. gerekçeler).
+  //
+  // KURAL: Her yeni istisna, GHSA kimliği + "reason" + "reviewBy" (gözden
+  // geçirme tarihi, ~3 ay) ile eklenir. reviewBy geçtiğinde bu dosya elden
+  // geçirilip yukarı akış paketlerde düzeltme çıkıp çıkmadığı kontrol edilir.
+  "high": true,
+  "allowlist": [
+    // --- eslint-config-next zinciri (apps/web) ---
+    // brace-expansion DoS (unbounded expansion → OOM) — eslint@9.39.5'in
+    // (eslint-config-next@15.5.22'nin peer üst sınırı) kendi @eslint/config-array@^0.21.2
+    // pini üzerinden geliyor; düzeltme yalnızca @eslint/config-array@0.23.x'te var ve o da
+    // yalnızca eslint@10.x ile uyumlu. eslint-config-next 15.x hattında eslint@10 desteği
+    // yok (bkz. https://github.com/vercel/next.js — Next 16 ile geliyor). Yalnızca
+    // `eslint`/`next lint` sırasında çalışır; üretim paketine hiç girmez, saldırgan
+    // girdisi işlemez (yalnızca kendi kod tabanımızı tarar).
+    // reason: eslint-config-next 15.x, eslint@10'u desteklemiyor (yalnızca ^7-^9);
+    //         düzeltme major (Next 16) gerektiriyor — kapsam dışı (CLAUDE.md: major atlama yok).
+    // reviewBy: 2026-10-30
+    "GHSA-mh99-v99m-4gvg",
+
+    // --- next'in kendi bundle'ladığı postcss (apps/web) ---
+    // next@15.5.22 postcss'i TAM sürüm ("8.4.31") ile pinliyor, üzerine yazılamıyor
+    // (override denendi — npm kurulumu ELSPROBLEMS ile bozuluyor). Yalnızca `next build`
+    // sırasında KENDİ ilk-taraf CSS dosyalarımızı derliyor; saldırgan kontrollü CSS/sourcemap
+    // işlemiyor (XSS/path-traversal senaryoları dışarıdan CSS kabul eden bir servisi varsayıyor).
+    // Not: npm audit üçüncü bir GHSA (GHSA-qx2v-qp2m-jg93) da listeliyor ama audit-ci bunun
+    // yüklü 8.4.31 sürümünde fiilen tetiklenmediğini doğruluyor — allowlist'e eklenmedi.
+    // reason: next 15.x hattında henüz bundle'lanan postcss güncellenmedi; düzeltme
+    //         muhtemelen bir sonraki 15.x patch'inde veya Next 16'da gelecek.
+    // reviewBy: 2026-10-30
+    "GHSA-6g55-p6wh-862q",
+    "GHSA-r28c-9q8g-f849",
+
+    // --- next'in opsiyonel sharp bağımlılığı (apps/web) ---
+    // next@15.5.22 sharp'ı "^0.34.3" ile istiyor (düzeltme 0.35.0+); override denendi,
+    // npm kurulumu yine ELSPROBLEMS ile bozuluyor. apps/web şu an next/image KULLANMIYOR
+    // (grep ile doğrulandı) — sharp kurulu ama çalışma zamanında hiç tetiklenmiyor.
+    // reason: next/image eklenirse BU İSTİSNA YENİDEN DEĞERLENDİRİLMELİ (o zaman gerçek
+    //         bir çalışma zamanı riski olur — libvips görüntü işleme CVE'leri).
+    // reviewBy: 2026-10-30
+    "GHSA-f88m-g3jw-g9cj"
+  ]
+}

@@ -162,6 +162,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      # high ve üzeri bir zafiyet varsa npm audit sıfır olmayan kodla çıkar —
-      # bu adım job'ı kırmızıya çevirir (talep edildiği gibi).
-      - run: npm audit --audit-level=high
+      - run: npm ci
+      # high ve üzeri her zafiyet job'ı kırmızıya çevirir — TEK istisna,
+      # kök audit-ci.jsonc'de gerekçe + gözden geçirme tarihiyle kayıtlı
+      # istisnalar (bkz. docs/security-audit.md). Yeni/farklı bir bulgu
+      # buradan geçmez.
+      - run: npx audit-ci --config audit-ci.jsonc

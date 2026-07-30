@@ -156,3 +156,30 @@ Ayrıca `ecuFileUpload.service.test.ts`'e YÜKSEK-1 için ayrı bir dosya-adı-s
 1. ~~Epic 0 (auth/tenant middleware)~~ — ✅ **Kapatıldı.** Artık `tenantId` hiçbir route'ta istemciden gelmiyor; gerçek JWT auth + Prisma Client Extension ile yapısal olarak (TypeScript seviyesinde) engelleniyor.
 2. Yamalanan 3 kritik + 1 yüksek bulgu (KRİTİK-1/2/3, YÜKSEK-1), "vehicle sahipliği hiç doğrulanmıyordu" ortak kök nedenine sahipti — Epic 0 sonrası bu kontrol otomatik hale geldi (`vehicle.findUnique({id})` zaten tenant-scoped), yeni bir `vehicleId` alan servis yazılırken bu artık varsayılan davranış.
 3. ORTA/DÜŞÜK bulgular hâlâ açık, acil değil, gelecek sprint'lere not düşüldü. Yeni takip maddesi: **ORTA-4** — `apps/diag-service` gibi Epic 0 kapsamı dışındaki servisler ile Customer/Vehicle route'ları yazıldığında bu denetimin ORTA-1/ORTA-2 önerileri (dahili auth, `redact`) o noktada tekrar gözden geçirilmeli.
+
+## npm Bağımlılık Denetimi (`npm-audit` CI job'ı) — Gerekçeli İstisnalar
+
+CI'daki `npm-audit` job'ı artık çıplak `npm audit --audit-level=high` yerine
+[`audit-ci`](https://github.com/IBM/audit-ci) + kök dizindeki **`audit-ci.jsonc`**
+allowlist'ini kullanıyor. Aşağıdaki 4 GHSA kaydı, üst akış paketlerin (Next.js,
+eslint-config-next, openapi-typescript) mevcut minor/patch sürümlerinde
+**düzeltilemediği** için allowlist'e alındı — hepsi build/lint zamanına özgü
+veya (sharp için) kod tabanında henüz tetiklenmeyen bir bağımlılık. Her kaydın
+yanında `audit-ci.jsonc` içinde gerekçe ve 3 aylık bir `reviewBy` tarihi var;
+o tarih geldiğinde üst akışta düzeltme çıkıp çıkmadığı kontrol edilip kayıt ya
+silinmeli ya da tarihi yenilenmelidir.
+
+| GHSA                | Paket (kök neden)                                     | Sınıf                                      | Düzeltme neden bekliyor                                                                                                                                                                                           | Gözden geçirme |
+| ------------------- | ----------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| GHSA-mh99-v99m-4gvg | `brace-expansion` (eslint-config-next zinciri)        | Yalnızca build/lint                        | eslint-config-next 15.x, eslint@10'u desteklemiyor (yalnızca ^7-^9); düzeltici `@eslint/config-array@0.23.x` eslint@10 gerektiriyor — major atlama Next 16'yı gerektirir.                                         | 2026-10-30     |
+| GHSA-6g55-p6wh-862q | `postcss` (next'in bundle'ladığı, "8.4.31" tam pinli) | Yalnızca build/lint                        | Next 15.x hattında bundle'lanan postcss henüz güncellenmedi; override denendi, `npm install` ELSPROBLEMS ile bozuluyor.                                                                                           | 2026-10-30     |
+| GHSA-r28c-9q8g-f849 | `postcss` (next'in bundle'ladığı)                     | Yalnızca build/lint                        | Aynı — yukarıdaki satırla aynı kök neden.                                                                                                                                                                         | 2026-10-30     |
+| GHSA-f88m-g3jw-g9cj | `sharp` (next'in opsiyonel bağımlılığı)               | Kurulu ama çalışma zamanında tetiklenmiyor | `apps/web` şu an `next/image` KULLANMIYOR (doğrulandı) — libvips CVE'leri yalnızca on-demand görüntü optimizasyonu çalışırken devreye girer. **`next/image` eklenirse bu kayıt hemen yeniden değerlendirilmeli.** | 2026-10-30     |
+
+Ayrıntılı sınıflandırma (14 paket düğümü → 3 kök neden → hangisinin
+runtime/build-time olduğu) ve denenip işe yaramayan çözüm yolları (npm
+`overrides` ile zorlama — hem eslint hem next için kurulumu ELSPROBLEMS ile
+bozdu) için bkz. `fix/npm-audit-high-findings` branch'inin commit geçmişi.
+`@redocly/openapi-core` (js-yaml zafiyeti) ve onun tetiklediği bulgular,
+allowlist'e ihtiyaç duymadan `npm update @redocly/openapi-core` ile (1.34.17 →
+1.34.18) temiz şekilde düzeltildi.
