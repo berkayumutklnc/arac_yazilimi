@@ -1,0 +1,21 @@
+name: Release Please
+
+# checks.yml/main.yml'den bağımsız çalışır — Conventional Commits'ten
+# otomatik CHANGELOG.md + versiyon bump PR'ı açar (bkz. commitlint.config.cjs,
+# husky commit-msg hook'u commit mesajlarının formatını zaten zorunlu kılıyor).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -1,0 +1,167 @@
+name: Main
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  # NOT: apps/api/prisma/migrations henüz boş (bu makinede canlı Postgres hiç
+  # olmadığı için `prisma migrate dev` hiç çalıştırılmadı — bkz.
+  # docs/local-postgres-setup.md). Bu iki job DOĞRU kurulu ama migration
+  # geçmişi commit'lenene kadar `prisma migrate deploy` boş şemayla biter ve
+  # sonraki adımlar kırmızı kalır — beklenen, geçici bir durum.
+  integration-tests:
+    needs: checks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: arac_yazilim_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      # Resmi minio/minio imajının GHA `services:` altında komutu override
+      # edilemiyor (varsayılan ENTRYPOINT arg bekliyor) — bitnami/minio salt
+      # env değişkenleriyle çalışır ve MINIO_DEFAULT_BUCKETS ile bucket'ı
+      # otomatik oluşturur.
+      minio:
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: ci_minio_user
+          MINIO_ROOT_PASSWORD: ci_minio_password
+          MINIO_DEFAULT_BUCKETS: arac-yazilim-ecu-files
+        ports:
+          - 9000:9000
+          - 9001:9001
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5432/arac_yazilim_test?schema=public
+      S3_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: arac-yazilim-ecu-files
+      S3_ACCESS_KEY_ID: ci_minio_user
+      S3_SECRET_ACCESS_KEY: ci_minio_password
+      S3_FORCE_PATH_STYLE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Apply migrations (asla db push — bkz. CLAUDE.md)
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_TEST }}
+        run: npx prisma migrate deploy
+      - name: Run integration tests
+        working-directory: apps/api
+        run: npm run test:integration
+
+  e2e-tests:
+    needs: checks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: arac_yazilim_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      minio:
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: ci_minio_user
+          MINIO_ROOT_PASSWORD: ci_minio_password
+          MINIO_DEFAULT_BUCKETS: arac-yazilim-ecu-files
+        ports:
+          - 9000:9000
+          - 9001:9001
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5432/arac_yazilim_test?schema=public
+      S3_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: arac-yazilim-ecu-files
+      S3_ACCESS_KEY_ID: ci_minio_user
+      S3_SECRET_ACCESS_KEY: ci_minio_password
+      S3_FORCE_PATH_STYLE: "true"
+      JWT_ACCESS_SECRET: ci-e2e-access-token-secret
+      PORT: 3001
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Apply migrations (asla db push — bkz. CLAUDE.md)
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_TEST }}
+        run: npx prisma migrate deploy
+      - name: Start API server in background
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_TEST }}
+        run: npm run dev &
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/health > /dev/null; then
+              echo "API ayakta."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API health check zaman aşımına uğradı." >&2
+          exit 1
+      - name: Install Playwright browsers
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright e2e
+        working-directory: apps/web
+        run: npm run test:e2e
+
+  npm-audit:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # high ve üzeri bir zafiyet varsa npm audit sıfır olmayan kodla çıkar —
+      # bu adım job'ı kırmızıya çevirir (talep edildiği gibi).
+      - run: npm audit --audit-level=high

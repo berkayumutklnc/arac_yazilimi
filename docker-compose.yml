@@ -1,0 +1,28 @@
+# Yerel geliştirme için MinIO (S3 uyumlu ECU dosya deposu) — bkz.
+# docs/local-minio-setup.md, docs/adr/0008-access-denied-audit-log.md.
+#
+# NOT: Bu makinede Docker kurulu değil (bkz. docs/local-postgres-setup.md'deki
+# ortam notu) — bu dosya bu geliştirme ortamında ÇALIŞTIRILMADI/doğrulanmadı.
+# Doğrulama, aynı yapılandırmayla native MinIO kurulumu üzerinden yapıldı
+# (bkz. docs/local-minio-setup.md, "Native kurulum" bölümü).
+#
+# Bucket ASLA public yapılmamalı — tek erişim yolu apps/api'nin ürettiği
+# presigned URL'ler (bkz. apps/api/src/storage/s3EcuFileStorage.ts). Bucket'ı
+# oluşturduktan sonra `mc anonymous set none local/arac-yazilim-ecu-files`
+# çalıştırın (varsayılan zaten private, bu yalnızca bir güvence).
+services:
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web konsolu
+    environment:
+      MINIO_ROOT_USER: arac_yazilim_dev
+      MINIO_ROOT_PASSWORD: devlocal_minio_2026
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+
+volumes:
+  minio-data:
