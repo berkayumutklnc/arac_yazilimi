@@ -8,6 +8,13 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    # Prisma client + diag-service OpenAPI tipleri gitignore'lu (bkz.
+    # apps/api/.gitignore, packages/shared) — üretilmeden lint/typecheck/test
+    # bu dosyalara import atan her yerde "Cannot find module" ile patlar
+    # (canlı Postgres+MinIO doğrulaması sonrası CI'ın gerçekten ilk kez
+    # tetiklendiği çalıştırmada tespit edildi — daha önce hiç koşmamıştı).
+    env:
+      DATABASE_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder?schema=public"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,10 +22,16 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: npm run generate:diag-types -w @arac-yazilim/shared
+      - name: Prisma generate
+        working-directory: apps/api
+        run: npx prisma generate
       - run: npm run lint
 
   typecheck:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder?schema=public"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,10 +39,16 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: npm run generate:diag-types -w @arac-yazilim/shared
+      - name: Prisma generate
+        working-directory: apps/api
+        run: npx prisma generate
       - run: npm run typecheck
 
   unit-tests:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder?schema=public"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,6 +56,10 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: npm run generate:diag-types -w @arac-yazilim/shared
+      - name: Prisma generate
+        working-directory: apps/api
+        run: npx prisma generate
       - run: npm run test
 
   python-tests:

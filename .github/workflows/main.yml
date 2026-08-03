@@ -62,6 +62,14 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: npm run generate:diag-types -w @arac-yazilim/shared
+      - name: Prisma generate
+        # `migrate deploy` (aşağıda) generate'i OTOMATİK çalıştırmaz
+        # (`migrate dev`'in aksine) — bkz. checks.yml'deki aynı gerekçe.
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_TEST }}
+        run: npx prisma generate
       - name: Apply migrations (asla db push — bkz. CLAUDE.md)
         working-directory: apps/api
         env:
@@ -124,6 +132,12 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: npm run generate:diag-types -w @arac-yazilim/shared
+      - name: Prisma generate
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_TEST }}
+        run: npx prisma generate
       - name: Apply migrations (asla db push — bkz. CLAUDE.md)
         working-directory: apps/api
         env:
