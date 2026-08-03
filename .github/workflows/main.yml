@@ -61,7 +61,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm install
+      - run: rm -f package-lock.json && npm install
       - run: npm run generate:diag-types -w @arac-yazilim/shared
       - name: Prisma generate
         # `migrate deploy` (aşağıda) generate'i OTOMATİK çalıştırmaz
@@ -131,7 +131,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm install
+      - run: rm -f package-lock.json && npm install
       - run: npm run generate:diag-types -w @arac-yazilim/shared
       - name: Prisma generate
         working-directory: apps/api
@@ -175,7 +175,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm install
+      - run: rm -f package-lock.json && npm install
       # high ve üzeri her zafiyet job'ı kırmızıya çevirir — TEK istisna,
       # kök audit-ci.jsonc'de gerekçe + gözden geçirme tarihiyle kayıtlı
       # istisnalar (bkz. docs/security-audit.md). Yeni/farklı bir bulgu

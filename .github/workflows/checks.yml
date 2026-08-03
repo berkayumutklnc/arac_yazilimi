@@ -3,15 +3,19 @@ name: Checks
 # Yeniden kullanılabilir workflow — hem pr.yml hem main.yml bunu çağırır
 # (bkz. plan: tek kaynaktan lint/typecheck/unit/python/prisma-validate).
 #
-# GEÇİCİ: `npm ci` yerine `npm install` kullanılıyor. package-lock.json
-# Windows'ta üretildiği için ~30 native-binary optional dependency'nin
-# (esbuild, sharp, rollup, lightningcss, @node-rs/argon2, @tailwindcss/oxide
-# vb.) linux-x64 varyantları lockfile'da hiç yok — `npm ci` bu yüzden Linux
-# runner'da MODULE_NOT_FOUND ile patlıyor (CI'ın branch uyuşmazlığı yüzünden
-# hiç tetiklenmediği dönemde fark edilmemiş, kalıcı bir sorun). Kalıcı çözüm:
-# package-lock.json'ı Linux/WSL'de (ya da CI'ın kendisinde) `rm -rf
-# node_modules package-lock.json && npm install` ile yeniden üretip commit'lemek
-# — o zaman `npm ci`'ya geri dönülmeli (lockfile-sıkı reproducibility için).
+# GEÇİCİ: `npm ci` yerine `rm -f package-lock.json && npm install` kullanılıyor.
+# package-lock.json Windows'ta üretildiği için ~30 native-binary optional
+# dependency'nin (esbuild, sharp, rollup, lightningcss, @node-rs/argon2,
+# @tailwindcss/oxide vb.) linux-x64 varyantları lockfile'da hiç yok — `npm ci`
+# (ve hatta lockfile'ı KORUYAN `npm install`, zaten çözülmüş paketleri tekrar
+# sorgulamadığı için) Linux runner'da MODULE_NOT_FOUND ile patlıyordu (CI'ın
+# branch uyuşmazlığı yüzünden hiç tetiklenmediği dönemde fark edilmemiş,
+# kalıcı bir sorun). Lockfile'ı silip her çalıştırmada Linux'ta sıfırdan
+# resolve ettirmek işi çözüyor ama sürüm reproducibility'sini kaybettiriyor —
+# KALICI çözüm ayrı bir iş: package-lock.json'ı Linux/WSL'de (ya da CI'ın
+# kendisinde) `rm -rf node_modules package-lock.json && npm install` ile
+# yeniden üretip commit'lemek, sonra bu geçici satırları kaldırıp `npm ci`'ya
+# dönmek.
 on:
   workflow_call:
 
@@ -31,7 +35,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm install
+      - run: rm -f package-lock.json && npm install
       - run: npm run generate:diag-types -w @arac-yazilim/shared
       - name: Prisma generate
         working-directory: apps/api
@@ -48,7 +52,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm install
+      - run: rm -f package-lock.json && npm install
       - run: npm run generate:diag-types -w @arac-yazilim/shared
       - name: Prisma generate
         working-directory: apps/api
@@ -65,7 +69,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm install
+      - run: rm -f package-lock.json && npm install
       - run: npm run generate:diag-types -w @arac-yazilim/shared
       - name: Prisma generate
         working-directory: apps/api
@@ -98,7 +102,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm install
+      - run: rm -f package-lock.json && npm install
       - name: prisma validate
         working-directory: apps/api
         run: npx prisma validate
