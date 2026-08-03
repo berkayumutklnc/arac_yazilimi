@@ -122,7 +122,6 @@ jobs:
       S3_SECRET_ACCESS_KEY: ci_minio_password
       S3_FORCE_PATH_STYLE: "true"
       JWT_ACCESS_SECRET: ci-e2e-access-token-secret
-      PORT: 3001
       NEXT_PUBLIC_API_URL: http://localhost:3001
       # server.ts bu değişken yoksa başlangıçta throw eder (davet linkleri
       # + CORS için zorunlu, bkz. app.ts) — Playwright'ın webServer'ı
@@ -150,6 +149,11 @@ jobs:
         working-directory: apps/api
         env:
           DATABASE_URL: ${{ env.DATABASE_URL_TEST }}
+          # Job-level env'e taşınmamalı — Playwright'ın webServer'ı da bu job
+          # içinde "npm run dev" çalıştırıyor (apps/web) ve `next dev` ortamda
+          # PORT görürse onu da kullanır, API'nin :3001'iyle çakışıp
+          # EADDRINUSE'a yol açar. Yalnızca bu adıma özel kalmalı.
+          PORT: 3001
         run: npm run dev &
       - name: Wait for API health
         run: |
