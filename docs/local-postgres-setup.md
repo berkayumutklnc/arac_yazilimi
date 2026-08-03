@@ -35,6 +35,47 @@ Yukarıdaki adım 4-5 bu makinede tamamlanıp `prisma/migrations/` commit'lenene
 CI job'ı boş bir şemaya karşı çalışıp kırmızı kalacaktır — bu geçici ve beklenen bir
 durumdur, CI kurulumundaki bir hata değildir.
 
+## Not: fiilen kullanılan kurulum "portable" zip'tir, servis DEĞİL
+
+Aşağıdaki adım 1 winget ile **servis olarak** kurulumu anlatıyor, ama bu
+makinede (yönetici/UAC erişimi olmadığı için) bunun yerine EnterpriseDB'nin
+"portable" zip dağıtımı kullanıldı — Windows servisi kaydetmez, `pg_ctl` ile
+elle başlatılıp durdurulur:
+
+```powershell
+# %USERPROFILE%\pgportable\pgsql  -> zip'ten çıkarılan binary'ler
+# %USERPROFILE%\pgportable\data   -> initdb ile oluşturulan veri dizini
+& "$env:USERPROFILE\pgportable\pgsql\bin\initdb.exe" -D "$env:USERPROFILE\pgportable\data" -U postgres --pwfile="$env:USERPROFILE\pgportable\pwfile"
+& "$env:USERPROFILE\pgportable\pgsql\bin\pg_ctl.exe" -D "$env:USERPROFILE\pgportable\data" -l "$env:USERPROFILE\pgportable\pg.log" start
+```
+
+Bu makinede zaten kurulu ve veritabanları oluşturulmuş durumda — adım 1-2'yi
+tekrar çalıştırmanıza gerek yok. Makine her yeniden başladığında (servis
+olmadığı için) PostgreSQL ve MinIO'yu elle başlatmanız gerekiyor — bunun için
+bkz. aşağıdaki **"Tek komutla ayağa kaldırma"** bölümü.
+
+## Tek komutla ayağa kaldırma: `scripts/dev-up.ps1`
+
+Makine yeniden başladığında (veya PostgreSQL/MinIO herhangi bir sebeple
+kapandığında) ikisini de tek komutla ayağa kaldırır — zaten ayaktaysa
+dokunmaz (idempotent), eksikse `arac_yazilim`/`arac_yazilim_test`
+veritabanlarını ve `arac-yazilim-ecu-files` MinIO bucket'ını da oluşturur:
+
+```powershell
+.\scripts\dev-up.ps1
+```
+
+Durdurmak için:
+
+```powershell
+.\scripts\dev-up.ps1 -Stop
+```
+
+Script, `%USERPROFILE%\pgportable` altındaki portable PostgreSQL'i ve
+winget ile kurulu `minio.exe`/`mc.exe`'yi (bkz. `docs/local-minio-setup.md`)
+sabit yollarla/portlarla varsayar — bu makinedeki mevcut kuruluma göre
+yazıldı, başka bir makineye taşınırsa yollar güncellenmeli.
+
 ## 1. PostgreSQL 16'yı kurun
 
 PowerShell'i **yönetici olarak** açıp:
