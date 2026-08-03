@@ -28,12 +28,18 @@ async function seedHubDealerScenario(costKurus: number, creditBalanceKurus: numb
   const dealerTenant = await prisma.tenant.create({
     data: { name: "Dealer", slug: `dealer-${randomUUID()}` },
   });
+  // Araç (ve orijinal stock dosyası) HER ZAMAN hub'ın tenant'ına ait —
+  // dealer'ın kendi tenant'ında hiç Vehicle satırı yok (bkz.
+  // fileRequestFulfillmentTransactional.ts buildScopedEcuFileDb). Bu fixture
+  // eskiden dealerTenant'a scoped kuruluyordu — canlı Postgres'e karşı ilk
+  // gerçek e2e/entegrasyon çalıştırmasında bunun fulfill akışını kırdığı
+  // (aracın hiç bulunamaması) tespit edildi.
   const customer = await prisma.customer.create({
-    data: { tenantId: dealerTenant.id, fullName: "Test Müşteri", phoneHash: "hash" },
+    data: { tenantId: hubTenant.id, fullName: "Test Müşteri", phoneHash: "hash" },
   });
   const vehicle = await prisma.vehicle.create({
     data: {
-      tenantId: dealerTenant.id,
+      tenantId: hubTenant.id,
       customerId: customer.id,
       plate: "34TEST34",
       brand: "Test",
@@ -45,7 +51,7 @@ async function seedHubDealerScenario(costKurus: number, creditBalanceKurus: numb
   const stockRom = await prisma.ecuFile.create({
     data: {
       id: stockRomId,
-      tenantId: dealerTenant.id,
+      tenantId: hubTenant.id,
       vehicleId: vehicle.id,
       fileType: EcuFileType.ORIGINAL_STOCK,
       storageKey: "stock.bin",

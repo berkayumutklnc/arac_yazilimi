@@ -95,12 +95,15 @@ export interface FulfillFileRequestParams {
 
 export interface FulfillFileRequestDeps {
   db: FulfillFileRequestDb;
-  // Kalibre dosya DEALER'ın tenant'ında oluşturulmalı (ADR 0002/0005), ama bu
-  // fonksiyonu tetikleyen hub kullanıcısının request-scoped db'si HUB'ın
-  // tenant'ına scoped — dealer'ın tenant'ı ancak fileRequest kaydı
-  // okunduktan SONRA bilinir. Bu yüzden EcuFile/Vehicle erişimi için ayrı,
-  // sonradan (fetch edilen dealerTenantId ile) scoped bir görünüm isteniyor.
-  scopeEcuFileToDealerTenant: (dealerTenantId: string) => EcuFileDb;
+  // Kalibre dosya DEALER'ın tenant'ında oluşturulmalı (ADR 0002/0005), ama
+  // referans verdiği Vehicle HER ZAMAN hub'ın tenant'ında yaşar — bu yüzden
+  // iki AYRI tenant scope'u gerekiyor (bkz. fileRequestFulfillmentTransactional.ts
+  // buildScopedEcuFileDb). Bu fonksiyonu tetikleyen hub kullanıcısının
+  // request-scoped db'si HUB'ın tenant'ına scoped, ama dealer'ın tenant'ı
+  // ancak fileRequest kaydı okunduktan SONRA bilinir — bu yüzden EcuFile/
+  // Vehicle erişimi için ayrı, sonradan (fetch edilen hubTenantId +
+  // dealerTenantId ile) scoped bir görünüm isteniyor.
+  scopeEcuFileToDealerTenant: (hubTenantId: string, dealerTenantId: string) => EcuFileDb;
 }
 
 export async function fulfillFileRequest(
@@ -140,7 +143,7 @@ export async function fulfillFileRequest(
     throw new InsufficientCreditError(dealerAccount.creditBalanceKurus, costKurus);
   }
 
-  const dealerEcuFileDb = deps.scopeEcuFileToDealerTenant(fileRequest.dealerTenantId);
+  const dealerEcuFileDb = deps.scopeEcuFileToDealerTenant(fileRequest.hubTenantId, fileRequest.dealerTenantId);
   const resultFile = await createEcuFile(dealerEcuFileDb, {
     vehicleId: fileRequest.vehicleId,
     fileType: fileRequest.requestedStage,

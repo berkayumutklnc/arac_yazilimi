@@ -155,13 +155,13 @@ describe("fulfillFileRequestTransactional", () => {
     expect(fileRequestUpdateMany).not.toHaveBeenCalled();
   });
 
-  it("kalibre dosya, dealer tenant'ına scoped çağrılarla oluşturulur (vehicle/ecuFile sorgularına dealerTenantId enjekte edilir)", async () => {
+  it("araç hub'ın tenant'ına scoped okunur, kalibre dosya dealer'ın tenant'ına scoped oluşturulur — araç HER ZAMAN hub'da yaşar", async () => {
     const { tx, vehicleFindUnique, ecuFileCreate } = createFakeTx();
     const { prisma } = createFakePrisma(tx);
 
     await fulfillFileRequestTransactional(prisma, baseParams());
 
-    expect(vehicleFindUnique).toHaveBeenCalledWith({ where: { id: vehicleId, tenantId: dealerTenantId } });
+    expect(vehicleFindUnique).toHaveBeenCalledWith({ where: { id: vehicleId, tenantId: hubTenantId } });
     const createArgs = ecuFileCreate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
     expect(createArgs.data.tenantId).toBe(dealerTenantId);
   });

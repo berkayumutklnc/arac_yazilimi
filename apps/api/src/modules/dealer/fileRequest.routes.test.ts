@@ -71,12 +71,20 @@ function createFakePrisma(
     fileRequestUpdate?: ReturnType<typeof vi.fn>;
     fileRequestFindMany?: ReturnType<typeof vi.fn>;
     auditCreate?: ReturnType<typeof vi.fn>;
+    // bkz. fileRequest.routes.ts buildFileRequestDb — araç HER ZAMAN hub'ın
+    // tenant'ına ait olduğu için artık ham `prisma.vehicle.findUnique`
+    // üzerinden (hubTenantId'ye elle scoped) okunuyor, `scopedDb.vehicle`
+    // ÜZERİNDEN DEĞİL (canlı Postgres'e karşı ilk e2e çalıştırmasında
+    // dealer'ın kendi tenant'ına scoped eski versiyonun özelliği işlevsiz
+    // kıldığı tespit edildi).
+    vehicleFindUnique?: ReturnType<typeof vi.fn>;
   } = {},
 ): PrismaClient {
   const $transaction = vi.fn((fn: (tx: unknown) => unknown) => fn(tx));
   return {
     $extends: () => scopedDb,
     $transaction,
+    vehicle: { findUnique: topLevel.vehicleFindUnique ?? vi.fn().mockResolvedValue({ id: vehicleId }) },
     dealerAccount: { findFirst: topLevel.dealerAccountFindFirst ?? vi.fn() },
     fileRequest: {
       create: topLevel.fileRequestCreate ?? vi.fn().mockResolvedValue({ id: fileRequestId }),

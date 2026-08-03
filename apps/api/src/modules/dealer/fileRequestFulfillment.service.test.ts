@@ -92,7 +92,7 @@ function inProgressRequest(overrides: Record<string, unknown> = {}) {
 }
 
 describe("fulfillFileRequest", () => {
-  it("scopeEcuFileToDealerTenant, FETCHED fileRequest.dealerTenantId ile çağrılır — hub'ın kendi tenant'ı DEĞİL", async () => {
+  it("scopeEcuFileToDealerTenant, FETCHED fileRequest'in hem hubTenantId hem dealerTenantId'siyle çağrılır — Araç hub'da yaşar, kalibre dosya dealer'da oluşur", async () => {
     const dbDeps = createMockDb();
     dbDeps.fileRequestFindUnique.mockResolvedValue(inProgressRequest());
     dbDeps.dealerAccountFindUnique.mockResolvedValue({
@@ -108,8 +108,7 @@ describe("fulfillFileRequest", () => {
       baseParams(),
     );
 
-    expect(scopeEcuFileToDealerTenant).toHaveBeenCalledWith(dealerTenantId);
-    expect(scopeEcuFileToDealerTenant).not.toHaveBeenCalledWith(hubTenantId);
+    expect(scopeEcuFileToDealerTenant).toHaveBeenCalledWith(hubTenantId, dealerTenantId);
   });
 
   it("hub OWNER/ENGINEER dışı bir kullanıcı fulfil edemez, hiçbir yan etki oluşmaz", async () => {

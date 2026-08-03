@@ -64,6 +64,31 @@ export function buildApp(prisma: PrismaClient, config: BuildAppConfig): FastifyI
     limits: { fileSize: DIAGNOSTIC_LOG_MAX_BYTES, files: 1 },
   });
 
+  // bkz. Prompt 9'da ertelenen manuel doğrulama — apps/web ve apps/api HER
+  // ZAMAN farklı origin'ler (dev: :3000/:3001, prod: app.*/api.* alt alan
+  // adları, bkz. ADR 0015). CORS hiç eklenmemişti; canlı Postgres+MinIO'ya
+  // karşı ilk gerçek Playwright e2e çalıştırmasında login'in tarayıcıdan asla
+  // başarılı olamadığı (aynı istek curl'le çalışırken) tespit edildi — @fastify/cors
+  // paketi bu makinede kurulamadığı için (Node sürüm uyuşmazlığı npm install'ı
+  // engelliyor) minimal, bağımlılıksız bir onRequest hook'u ile uygulandı.
+  // Origin joker karakter DEĞİL — refresh cookie'nin credentials:"include" ile
+  // çalışabilmesi için (apps/web/lib/apiClient.ts) tam eşleşme zorunlu.
+  app.addHook("onRequest", async (request, reply) => {
+    const origin = request.headers.origin;
+    if (origin === config.webAppBaseUrl) {
+      reply.header("Access-Control-Allow-Origin", origin);
+      reply.header("Access-Control-Allow-Credentials", "true");
+      reply.header("Vary", "Origin");
+    }
+    if (request.method === "OPTIONS") {
+      reply
+        .header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+        .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        .code(204)
+        .send();
+    }
+  });
+
   app.get("/health", () => ({ status: "ok" }));
 
   // Kimlik doğrulama gerektirmeyen tek route'lar — burada asla tenantId/rol

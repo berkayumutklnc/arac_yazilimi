@@ -18,12 +18,22 @@ import {
   fulfillFileRequestTransactional,
   ConcurrentFulfillmentError,
 } from "./fileRequestFulfillmentTransactional.js";
+// fulfill akışı içeride createEcuFile'ı (apps/api/src/modules/ecufile/ecuFile.service.ts)
+// çağırır — o modülün KENDİ VehicleNotFoundError'ı (fileRequest.service.ts'teki
+// ile aynı isim/mesaj ama FARKLI sınıf kimliği) buraya kadar yükselirdi ve
+// aşağıdaki instanceof kontrolüne YAKALANMADAN 500'e düşerdi (canlı Postgres'e
+// karşı ilk gerçek e2e çalıştırmasında tespit edildi).
+import {
+  VehicleNotFoundError as EcuFileVehicleNotFoundError,
+  MissingStockRomReferenceError,
+  StockRomReferenceNotFoundError,
+} from "../ecufile/ecuFile.service.js";
 import { listFileRequests, getDealerAccountBalance } from "./fileRequestQuery.service.js";
 import { Role } from "../../generated/prisma/enums.js";
 import { createAuthPreHandler } from "../../middleware/authPreHandler.js";
 import { requireRole } from "../../middleware/requireRole.js";
-import type { AppScopedDb } from "../../db/tenantScopedDb.js";
-import type { PrismaClient } from "../../generated/prisma/client.js";
+import { applyTenantScope } from "../../db/tenantScopedDb.js";
+import type { Prisma, PrismaClient } from "../../generated/prisma/client.js";
 import "../../types/fastify.js";
 
 const HUB_ROLES: readonly Role[] = [Role.OWNER, Role.ENGINEER];
@@ -37,13 +47,24 @@ const dealerAccountQuerySchema = z.object({ hubTenantId: z.string().min(1) });
 
 // FileRequest/DealerAccount/FileRequestStatusAuditLog bilinçli olarak
 // tenant-scope extension'ın DIŞINDA (bkz. ADR 0006) — iki-tenant ilişkisi
-// olduğu için "otomatik benim tenant'ım" filtresi yanlış sonuç verir. Vehicle
-// İSE tek-tenant bir model, `tenantDb.vehicle` üzerinden zaten doğru şekilde
-// scoped geliyor (KRİTİK-2 fix'inin korunması için buradan alınmalı, raw
-// `prisma.vehicle` DEĞİL).
-function buildFileRequestDb(prisma: PrismaClient, tenantDb: AppScopedDb): FileRequestDb {
+// olduğu için "otomatik benim tenant'ım" filtresi yanlış sonuç verir.
+// Vehicle İSE HER ZAMAN hub'ın tenant'ına ait — `hubTenantId` parametresiyle
+// (çağıranın kendi tenant'ı DEĞİL) elle scoped ediliyor, aynı
+// fileRequestFulfillmentTransactional.ts'teki `buildScopedEcuFileDb` deseni
+// (canlı Postgres'e karşı ilk e2e çalıştırmasında, dealer'ın kendi tenant'ına
+// scoped bir versiyonun özelliği işlevsiz kıldığı tespit edildi — bkz.
+// fileRequest.service.ts'teki FileRequestDb.vehicle yorumu).
+// `transitionFileRequestStatus` çağırılarında vehicle hiç kullanılmadığı
+// için oradaki hubTenantId (çağıranın kendi tenant'ı, zaten hub'ın kendisi)
+// pratikte hiçbir etkisi olmayan bir değer.
+function buildFileRequestDb(prisma: PrismaClient, hubTenantId: string): FileRequestDb {
   return {
-    vehicle: tenantDb.vehicle,
+    vehicle: {
+      findUnique: (args) =>
+        prisma.vehicle.findUnique(
+          applyTenantScope("Vehicle", "findUnique", args, hubTenantId) as Prisma.VehicleFindUniqueArgs,
+        ),
+    },
     dealerAccount: {
       findFirst: (args) => prisma.dealerAccount.findFirst(args),
     },
@@ -73,8 +94,14 @@ function mapCommonErrors(err: unknown): { code: number; body: { error: string } 
   if (err instanceof FileRequestNotFoundError || err instanceof DealerAccountNotFoundError) {
     return { code: 404, body: { error: err.message } };
   }
-  if (err instanceof VehicleNotFoundError) {
+  if (err instanceof VehicleNotFoundError || err instanceof EcuFileVehicleNotFoundError) {
     return { code: 404, body: { error: err.message } };
+  }
+  if (err instanceof StockRomReferenceNotFoundError) {
+    return { code: 404, body: { error: err.message } };
+  }
+  if (err instanceof MissingStockRomReferenceError) {
+    return { code: 400, body: { error: err.message } };
   }
   return undefined;
 }
@@ -88,7 +115,7 @@ export function registerFileRequestRoutes(app: FastifyInstance, prisma: PrismaCl
     }
 
     const body = createFileRequestInputSchema.parse(request.body);
-    const db = buildFileRequestDb(prisma, request.tenantDb);
+    const db = buildFileRequestDb(prisma, body.hubTenantId);
 
     try {
       const result = await createFileRequest(db, actingUserFrom(request), body);
@@ -111,7 +138,7 @@ export function registerFileRequestRoutes(app: FastifyInstance, prisma: PrismaCl
       const params = idParamsSchema.parse(request.params);
       const costKurus =
         toStatus === "ACCEPTED" ? acceptBodySchema.parse(request.body).costKurus : undefined;
-      const db = buildFileRequestDb(prisma, request.tenantDb);
+      const db = buildFileRequestDb(prisma, request.authContext.tenantId);
 
       try {
         await transitionFileRequestStatus(db, {

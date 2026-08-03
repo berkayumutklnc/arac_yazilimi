@@ -74,8 +74,13 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
       credentials: "include",
       headers: {
         // FormData için Content-Type ATANMAZ — tarayıcı boundary'li
-        // multipart/form-data değerini kendisi ekler.
-        ...(isFormData ? {} : { "Content-Type": "application/json" }),
+        // multipart/form-data değerini kendisi ekler. Gövdesiz isteklerde de
+        // (ör. PATCH .../start) ATANMAZ — Fastify, Content-Type: application/json
+        // ile birlikte boş bir gövde gelirse FST_ERR_CTP_EMPTY_JSON_BODY ile
+        // 400 döner (canlı Postgres+MinIO'ya karşı ilk gerçek Playwright
+        // e2e çalıştırmasında, tarayıcıdan yapılan gövdesiz PATCH'lerin hep
+        // "Bad Request" aldığı tespit edildi).
+        ...(!isFormData && options.body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: options.body === undefined ? undefined : isFormData ? (options.body as FormData) : JSON.stringify(options.body),

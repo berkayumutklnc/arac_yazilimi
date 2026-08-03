@@ -102,9 +102,17 @@ interface FileRequestAuditData {
 }
 
 export interface FileRequestDb {
-  // Güvenlik (bkz. docs/security-audit.md, KRİTİK-2 — ADR 0006 ile artık
-  // otomatik): db, talebi açan DEALER'ın kendi tenant'ına scoped olduğu için
-  // vehicle.findUnique({where:{id}}) yalnızca o dealer'ın araçlarını bulabilir.
+  // Güvenlik (bkz. docs/security-audit.md KRİTİK-2): araç HER ZAMAN hub'ın
+  // tenant'ına ait (dealer'ın kendi tenant'ında hiç Vehicle satırı yok) —
+  // bu yüzden çağıran (route katmanı) burayı input.hubTenantId'ye scoped
+  // vermelidir, ARAYAN DEALER'IN KENDİ tenant'ına DEĞİL (canlı Postgres'e
+  // karşı ilk gerçek e2e çalıştırmasında dealer'ın kendi tenant'ına scoped
+  // bir versiyonun her zaman VehicleNotFoundError verdiği, özelliği tamamen
+  // işlevsiz kıldığı tespit edildi — bkz. fileRequest.routes.ts
+  // buildFileRequestDb). KRİTİK-2'nin asıl kapattığı açık "hiçbir tenant
+  // scope'u yok, herhangi bir tenant'ın aracı bulunabiliyordu" idi;
+  // hubTenantId'ye scoped olmak bunu hâlâ kapatır (dealerAccount kontrolü de
+  // ayrıca dealer'ın bu hub'la gerçek bir ilişkisi olduğunu doğrular).
   vehicle: {
     findUnique: (args: { where: { id: string } }) => Promise<{ id: string } | null>;
   };

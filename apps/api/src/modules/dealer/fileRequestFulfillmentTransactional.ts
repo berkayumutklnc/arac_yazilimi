@@ -57,16 +57,30 @@ function buildTransactionalDb(tx: Prisma.TransactionClient): FulfillFileRequestD
 }
 
 // Kalibre dosya DEALER'ın tenant'ında oluşturulmalı (bkz.
-// fileRequestFulfillment.service.ts). Tenant kapsamlaması burada `tx` üzerinde
-// elle uygulanıyor (aynı test edilmiş `applyTenantScope` saf fonksiyonuyla) —
+// fileRequestFulfillment.service.ts) — `ecuFile.create` bu yüzden
+// dealerTenantId'ye scoped. Araç VE orijinal stock dosyası (stockRomRef —
+// createEcuFile bunu `ecuFile.findUnique` ile okur, bkz. ecuFile.service.ts)
+// İSE her zaman HUB'ın tenant'ında yaşar (dealer'ın kendi tenant'ında hiç
+// Vehicle/ORIGINAL_STOCK satırı yok) — `vehicle.findUnique` VE
+// `ecuFile.findUnique` bu yüzden hubTenantId'ye, yalnızca `ecuFile.create`
+// dealerTenantId'ye scoped (canlı Postgres'e karşı ilk gerçek e2e
+// çalıştırmasında, üçünün de dealerTenantId'ye scoped olduğu eski halin
+// fulfill akışını art arda "Araç bulunamadı" ve "stockRomRef bulunamadı"
+// hatalarıyla tamamen kırdığı tespit edildi — bkz. fileRequest.service.ts'teki
+// analog kalem-tenant bug'ı). Tenant kapsamlaması burada `tx` üzerinde elle
+// uygulanıyor (aynı test edilmiş `applyTenantScope` saf fonksiyonuyla) —
 // `createTenantScopedDb`'nin `$extends()` tabanlı üretim client'ı yerine, bu
 // atomik işlem TAMAMEN aynı transaction (`tx`) içinde kalsın diye.
-function buildScopedEcuFileDb(tx: Prisma.TransactionClient, dealerTenantId: string): EcuFileDb {
+function buildScopedEcuFileDb(
+  tx: Prisma.TransactionClient,
+  hubTenantId: string,
+  dealerTenantId: string,
+): EcuFileDb {
   return {
     vehicle: {
       findUnique: (args) =>
         tx.vehicle.findUnique(
-          applyTenantScope("Vehicle", "findUnique", args, dealerTenantId) as Prisma.VehicleFindUniqueArgs,
+          applyTenantScope("Vehicle", "findUnique", args, hubTenantId) as Prisma.VehicleFindUniqueArgs,
         ),
     },
     ecuFile: {
@@ -80,7 +94,7 @@ function buildScopedEcuFileDb(tx: Prisma.TransactionClient, dealerTenantId: stri
             "EcuFile",
             "findUnique",
             args,
-            dealerTenantId,
+            hubTenantId,
           ) as Prisma.EcuFileFindUniqueArgs,
         ),
     },
@@ -93,8 +107,8 @@ export async function fulfillFileRequestTransactional(
 ) {
   return prisma.$transaction(async (tx) => {
     const db = buildTransactionalDb(tx);
-    const scopeEcuFileToDealerTenant = (dealerTenantId: string) =>
-      buildScopedEcuFileDb(tx, dealerTenantId);
+    const scopeEcuFileToDealerTenant = (hubTenantId: string, dealerTenantId: string) =>
+      buildScopedEcuFileDb(tx, hubTenantId, dealerTenantId);
     return fulfillFileRequest({ db, scopeEcuFileToDealerTenant }, params);
   });
 }
