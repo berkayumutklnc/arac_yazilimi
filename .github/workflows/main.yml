@@ -32,9 +32,12 @@ jobs:
       # Resmi minio/minio imajının GHA `services:` altında komutu override
       # edilemiyor (varsayılan ENTRYPOINT arg bekliyor) — bitnami/minio salt
       # env değişkenleriyle çalışır ve MINIO_DEFAULT_BUCKETS ile bucket'ı
-      # otomatik oluşturur.
+      # otomatik oluşturur. `bitnami/minio:latest` Broadcom'un Bitnami ücretsiz
+      # katalog değişikliğiyle Docker Hub'dan tamamen kaldırıldı (repo artık
+      # boş) — donmuş/bakımsız ama hâlâ çekilebilen `bitnamilegacy/minio`
+      # kopyasına, sabit bir sürüm etiketiyle geçildi.
       minio:
-        image: bitnami/minio:latest
+        image: bitnamilegacy/minio:2025.7.23-debian-12-r5
         env:
           MINIO_ROOT_USER: ci_minio_user
           MINIO_ROOT_PASSWORD: ci_minio_password
@@ -97,7 +100,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       minio:
-        image: bitnami/minio:latest
+        image: bitnamilegacy/minio:2025.7.23-debian-12-r5
         env:
           MINIO_ROOT_USER: ci_minio_user
           MINIO_ROOT_PASSWORD: ci_minio_password
