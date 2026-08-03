@@ -20,8 +20,8 @@ permissions:
   packages: write
 
 jobs:
-  # checks.yml'i tekrar çalıştırmıyoruz — main.yml zaten her main push'unda
-  # lint/typecheck/test'i garanti ediyor; tag'ler main'den (release-please PR
+  # checks.yml'i tekrar çalıştırmıyoruz — main.yml zaten her master push'unda
+  # lint/typecheck/test'i garanti ediyor; tag'ler master'dan (release-please PR
   # merge'i sonrası) kesiliyor, bu yüzden tag push'ta tekrar aynı kontrolleri
   # koşmak gereksiz gecikme. Yalnızca build+push+deploy burada.
   build-and-push:

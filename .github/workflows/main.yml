@@ -2,7 +2,7 @@ name: Main
 
 on:
   push:
-    branches: [main]
+    branches: [master]
 
 concurrency:
   group: main
@@ -12,11 +12,6 @@ jobs:
   checks:
     uses: ./.github/workflows/checks.yml
 
-  # NOT: apps/api/prisma/migrations henüz boş (bu makinede canlı Postgres hiç
-  # olmadığı için `prisma migrate dev` hiç çalıştırılmadı — bkz.
-  # docs/local-postgres-setup.md). Bu iki job DOĞRU kurulu ama migration
-  # geçmişi commit'lenene kadar `prisma migrate deploy` boş şemayla biter ve
-  # sonraki adımlar kırmızı kalır — beklenen, geçici bir durum.
   integration-tests:
     needs: checks
     runs-on: ubuntu-latest
@@ -118,6 +113,10 @@ jobs:
       JWT_ACCESS_SECRET: ci-e2e-access-token-secret
       PORT: 3001
       NEXT_PUBLIC_API_URL: http://localhost:3001
+      # server.ts bu değişken yoksa başlangıçta throw eder (davet linkleri
+      # + CORS için zorunlu, bkz. app.ts) — Playwright'ın webServer'ı
+      # apps/web'i varsayılan olarak :3000'de çalıştırır (playwright.config.ts).
+      WEB_APP_BASE_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
